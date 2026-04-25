@@ -13,8 +13,8 @@ const router = express.Router();
 
 router.get('/', getProducts);
 router.get('/:id', getProductById);
-router.post('/', protect, isAdmin, upload.single('image'), createProduct);
-router.put('/:id', protect, isAdmin, upload.single('image'), updateProduct);
+router.post('/', protect, isAdmin, upload.array('images', 5), createProduct);
+router.put('/:id', protect, isAdmin, upload.array('images', 5), updateProduct);
 router.delete('/:id', protect, isAdmin, deleteProduct);
 
 export default router;

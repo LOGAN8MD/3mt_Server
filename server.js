@@ -1,5 +1,4 @@
-import dotenv from 'dotenv';
-dotenv.config();
+import 'dotenv/config';
 import express from 'express';
 
 import connectDB from './config/db.js';
@@ -15,6 +14,7 @@ const PORT = process.env.PORT || 8080;
 const app = express();
 
 app.use(cors());  // This allows your frontend to make requests to the backend
+
 // app.use(cors({
 //     origin: '*',  // For development, or specify 'http://localhost:3000' if restricted to the frontend
 //     methods: ['GET', 'POST','DELETE','PUT'],
@@ -24,9 +24,9 @@ app.use(express.json());
 app.use('/uploads', express.static('uploads'));
 
 // Routes
-app.get('/pop',(req, res)=>{
+app.get('/pop', (req, res) => {
     console.log("Running on Port 8080")
-   
+
     res.send("Deepak 8080")
 })
 
