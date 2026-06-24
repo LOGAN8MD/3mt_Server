@@ -7,40 +7,59 @@ import cors from 'cors';
 import authRoutes from './routes/authRoutes.js';
 import productRoutes from './routes/productRoutes.js';
 import orderRoutes from './routes/orderRoutes.js';
+import errorHandler from './middlewares/errorMiddleware.js';
+import AppError from './utils/AppError.js';
 
 
 connectDB();
 const PORT = process.env.PORT || 8080;
 const app = express();
 
-app.use(cors());  // This allows your frontend to make requests to the backend
+const defaultAllowedOrigins = [
+    'http://localhost:3000',
+    'http://127.0.0.1:3000',
+    'https://3mt-machine-tools.netlify.app',
+    'https://3mt-dashboard.netlify.app',
+];
 
-// app.use(cors({
-//     origin: '*',  // For development, or specify 'http://localhost:3000' if restricted to the frontend
-//     methods: ['GET', 'POST','DELETE','PUT'],
-//     allowedHeaders: ['Content-Type', 'Authorization'],
-//   }));
-app.use(express.json());
+const allowedOrigins = (process.env.CLIENT_URLS || defaultAllowedOrigins.join(','))
+    .split(',')
+    .map((origin) => origin.trim())
+    .filter(Boolean);
+
+app.use(cors({
+    origin(origin, callback) {
+        if (!origin || allowedOrigins.includes(origin)) {
+            return callback(null, true);
+        }
+
+        return callback(new AppError('Not allowed by CORS', 403));
+    },
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization'],
+}));
+
+app.use(express.json({ limit: '1mb' }));
 app.use('/uploads', express.static('uploads'));
 
 // Routes
-app.get('/pop', (req, res) => {
-    console.log("Running on Port 8080")
+app.get('/api/health', (req, res) => {
+    res.json({
+        status: 'ok',
+        service: '3mt-server',
+        timestamp: new Date().toISOString(),
+    });
+});
 
-    res.send("Deepak 8080")
+app.get('/pop', (req, res) => {
+    res.send("Server running")
 })
 
 app.use('/api/auth', authRoutes);
 app.use('/api/products', productRoutes);
 app.use('/api/orders', orderRoutes);
 
+// Global Error Handler
+app.use(errorHandler);
 
-app.listen(PORT, () => console.log(`Deepak Server running on port ${PORT}`));
-
-
-// deepakmishra2327
-// oHWYu8NaiFuBod8t
-//password = Logan8md
-
-// IP address (45.119.30.246)
-
+app.listen(PORT, () => console.log(`Server running on port ${PORT}`));

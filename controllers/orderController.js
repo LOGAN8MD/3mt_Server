@@ -1,6 +1,7 @@
 import Order from '../models/Order.js';
+import AppError from '../utils/AppError.js';
 
-export const createOrder = async (req, res) => {
+export const createOrder = async (req, res, next) => {
   const { orderItems, totalAmount } = req.body;
   try {
     const order = new Order({
@@ -11,24 +12,24 @@ export const createOrder = async (req, res) => {
     const savedOrder = await order.save();
     res.status(201).json(savedOrder);
   } catch (err) {
-    res.status(500).json({ message: 'Failed to create order' });
+    next(new AppError('Failed to create order: ' + err.message, 500));
   }
 };
 
-export const getMyOrders = async (req, res) => {
+export const getMyOrders = async (req, res, next) => {
   try {
     const orders = await Order.find({ user: req.user._id }).populate('orderItems.product');
     res.json(orders);
   } catch (err) {
-    res.status(500).json({ message: 'Failed to fetch orders' });
+    next(new AppError('Failed to fetch orders: ' + err.message, 500));
   }
 };
 
-export const getAllOrders = async (req, res) => {
+export const getAllOrders = async (req, res, next) => {
   try {
     const orders = await Order.find({}).populate('user').populate('orderItems.product');
     res.json(orders);
   } catch (err) {
-    res.status(500).json({ message: 'Failed to fetch all orders' });
+    next(new AppError('Failed to fetch all orders: ' + err.message, 500));
   }
 };
