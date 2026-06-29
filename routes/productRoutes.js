@@ -1,6 +1,7 @@
 import express from 'express';
 import {
   getProducts,
+  getProductFilterOptions,
   searchProducts,
   getRelatedProducts,
   getProductById,
@@ -15,6 +16,7 @@ const router = express.Router();
 
 router.get('/', getProducts);
 router.get('/search', searchProducts);
+router.get('/filter-options', getProductFilterOptions);
 router.get('/:id/related', getRelatedProducts);
 router.get('/:id', getProductById);
 router.post('/', protect, isAdmin, upload.array('images', 5), createProduct);

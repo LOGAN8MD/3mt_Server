@@ -7,6 +7,8 @@ import AppError from '../utils/AppError.js';
 const DEFAULT_SEARCH_LIMIT = 8;
 const DEFAULT_RELATED_LIMIT = 8;
 const MAX_QUERY_LIMIT = 100;
+const PRODUCT_CARD_FIELDS = 'name price brand category type stock images';
+const SEARCH_PRODUCT_FIELDS = `${PRODUCT_CARD_FIELDS} model`;
 
 const escapeRegex = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
@@ -24,6 +26,25 @@ const parsePositiveInteger = (value, fieldName, defaultValue) => {
 const parseLimit = (value, defaultValue) => {
   const limit = parsePositiveInteger(value, 'limit', defaultValue);
   return Math.min(limit, MAX_QUERY_LIMIT);
+};
+
+const parseNonNegativeNumber = (value, fieldName) => {
+  if (value === undefined) return null;
+
+  const parsedValue = Number(value);
+  if (!Number.isFinite(parsedValue) || parsedValue < 0) {
+    throw new AppError(`${fieldName} must be a non-negative number`, 400);
+  }
+
+  return parsedValue;
+};
+
+const parseOptionalBoolean = (value, fieldName) => {
+  if (value === undefined) return null;
+  if (value === 'true') return true;
+  if (value === 'false') return false;
+
+  throw new AppError(`${fieldName} must be true or false`, 400);
 };
 
 const buildTextSearchFilter = (searchTerm) => {
@@ -80,6 +101,34 @@ export const getProducts = async (req, res, next) => {
       }
     }
 
+    const minPrice = parseNonNegativeNumber(req.query.minPrice, 'minPrice');
+    const maxPrice = parseNonNegativeNumber(req.query.maxPrice, 'maxPrice');
+
+    if (minPrice !== null || maxPrice !== null) {
+      if (minPrice !== null && maxPrice !== null && minPrice > maxPrice) {
+        throw new AppError('minPrice must be less than or equal to maxPrice', 400);
+      }
+
+      const priceFilter = {};
+      if (minPrice !== null) priceFilter.$gte = minPrice;
+      if (maxPrice !== null) priceFilter.$lte = maxPrice;
+      filters.push({ price: priceFilter });
+    }
+
+    const inStock = parseOptionalBoolean(req.query.inStock, 'inStock');
+    if (inStock === true) {
+      filters.push({ stock: { $gt: 0 } });
+    }
+
+    if (inStock === false) {
+      filters.push({
+        $or: [
+          { stock: { $lte: 0 } },
+          { stock: { $exists: false } },
+        ],
+      });
+    }
+
     const filter = filters.length > 0 ? { $and: filters } : {};
     const sort = getSortOption(req.query.sort);
     const page = parsePositiveInteger(req.query.page, 'page', 1);
@@ -87,6 +136,10 @@ export const getProducts = async (req, res, next) => {
     const limit = hasPagination ? parseLimit(req.query.limit, 20) : null;
 
     let query = Product.find(filter).lean();
+
+    if (hasPagination) {
+      query = query.select(PRODUCT_CARD_FIELDS).slice('images', 1);
+    }
 
     if (sort) {
       query = query.sort(sort);
@@ -96,11 +149,75 @@ export const getProducts = async (req, res, next) => {
       query = query.skip((page - 1) * limit).limit(limit);
     }
 
-    const products = await query;
+    const [products, total] = await Promise.all([
+      query,
+      hasPagination ? Product.countDocuments(filter) : Promise.resolve(null),
+    ]);
+
+    if (hasPagination) {
+      const totalPages = Math.ceil(total / limit);
+
+      return res.json({
+        products,
+        pagination: {
+          page,
+          limit,
+          total,
+          totalPages,
+          hasNextPage: page < totalPages,
+          hasPrevPage: page > 1,
+        },
+      });
+    }
+
     res.json(products);
   } catch (err) {
     if (err instanceof AppError) return next(err);
     next(new AppError('Failed to fetch products: ' + err.message, 500));
+  }
+};
+
+export const getProductFilterOptions = async (req, res, next) => {
+  try {
+    const cleanOptions = (values) =>
+      values
+        .filter((value) => typeof value === 'string' && value.trim())
+        .map((value) => value.trim())
+        .sort((a, b) => a.localeCompare(b));
+
+    const [brands, types, categories, priceStats] = await Promise.all([
+      Product.distinct('brand'),
+      Product.distinct('type'),
+      Product.distinct('category'),
+      Product.aggregate([
+        {
+          $group: {
+            _id: null,
+            min: { $min: '$price' },
+            max: { $max: '$price' },
+          },
+        },
+      ]),
+    ]);
+
+    const priceRange = priceStats[0]
+      ? {
+          min: priceStats[0].min ?? 0,
+          max: priceStats[0].max ?? 0,
+        }
+      : {
+          min: 0,
+          max: 0,
+        };
+
+    res.json({
+      brands: cleanOptions(brands),
+      types: cleanOptions(types),
+      categories: cleanOptions(categories),
+      priceRange,
+    });
+  } catch (err) {
+    next(new AppError('Failed to fetch product filter options: ' + err.message, 500));
   }
 };
 
@@ -113,7 +230,8 @@ export const searchProducts = async (req, res, next) => {
 
     const limit = parseLimit(req.query.limit, DEFAULT_SEARCH_LIMIT);
     const products = await Product.find(buildTextSearchFilter(searchTerm))
-      .select('name category type brand model price stock images')
+      .select(SEARCH_PRODUCT_FIELDS)
+      .slice('images', 1)
       .sort({ name: 1 })
       .limit(limit)
       .lean();
@@ -171,6 +289,8 @@ export const getRelatedProducts = async (req, res, next) => {
       _id: { $ne: product._id },
       $or: relatedFilters,
     })
+      .select(PRODUCT_CARD_FIELDS)
+      .slice('images', 1)
       .sort({ createdAt: -1 })
       .limit(limit)
       .lean();

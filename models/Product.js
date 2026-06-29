@@ -20,6 +20,9 @@ const productSchema = new mongoose.Schema({
 
 productSchema.index({ category: 1, type: 1 });
 productSchema.index({ brand: 1 });
+productSchema.index({ price: 1 });
+productSchema.index({ stock: 1 });
+productSchema.index({ type: 1, price: 1 });
 productSchema.index({ createdAt: -1 });
 
 const Product = mongoose.model('Product', productSchema);
