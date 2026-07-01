@@ -6,7 +6,7 @@
   "scripts": {
     "start": "node server.js",
     "dev": "nodemon server.js",
-    "check": "node --check server.js && node --check config/cloudinary.js && node --check config/db.js && node --check controllers/authController.js && node --check controllers/orderController.js && node --check controllers/productController.js && node --check middlewares/authMiddleware.js && node --check middlewares/errorMiddleware.js && node --check middlewares/uploadMiddleware.js && node --check models/Order.js && node --check models/Product.js && node --check models/User.js && node --check routes/authRoutes.js && node --check routes/orderRoutes.js && node --check routes/productRoutes.js && node --check utils/AppError.js",
+    "check": "node --check server.js && node --check config/cloudinary.js && node --check config/db.js && node --check controllers/authController.js && node --check controllers/orderController.js && node --check controllers/pendingProductController.js && node --check controllers/productController.js && node --check controllers/userController.js && node --check middlewares/authMiddleware.js && node --check middlewares/errorMiddleware.js && node --check middlewares/uploadMiddleware.js && node --check models/Order.js && node --check models/PendingProduct.js && node --check models/Product.js && node --check models/User.js && node --check routes/authRoutes.js && node --check routes/orderRoutes.js && node --check routes/pendingProductRoutes.js && node --check routes/productRoutes.js && node --check routes/userRoutes.js && node --check utils/AppError.js",
     "verify": "npm run check"
   },
   "keywords": [],

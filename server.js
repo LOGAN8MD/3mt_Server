@@ -7,6 +7,8 @@ import cors from 'cors';
 import authRoutes from './routes/authRoutes.js';
 import productRoutes from './routes/productRoutes.js';
 import orderRoutes from './routes/orderRoutes.js';
+import userRoutes from './routes/userRoutes.js';
+import pendingProductRoutes from './routes/pendingProductRoutes.js';
 import errorHandler from './middlewares/errorMiddleware.js';
 import AppError from './utils/AppError.js';
 
@@ -35,7 +37,7 @@ app.use(cors({
 
         return callback(new AppError('Not allowed by CORS', 403));
     },
-    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH' ,'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization'],
 }));
 
@@ -56,6 +58,8 @@ app.get('/pop', (req, res) => {
 })
 
 app.use('/api/auth', authRoutes);
+app.use('/api/users', userRoutes);
+app.use('/api/pending-products', pendingProductRoutes);
 app.use('/api/products', productRoutes);
 app.use('/api/orders', orderRoutes);
 
