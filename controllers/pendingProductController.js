@@ -4,6 +4,7 @@ import cloudinary from '../config/cloudinary.js';
 import PendingProduct from '../models/PendingProduct.js';
 import Product from '../models/Product.js';
 import AppError from '../utils/AppError.js';
+import { normalizeProductFields } from '../utils/normalizeProductFields.js';
 
 const pendingProductStatuses = ['pending', 'approved', 'rejected'];
 const editableProductFields = [
@@ -84,23 +85,29 @@ const pickProductFields = (body, requireCoreFields = false) => {
 
   for (const field of editableProductFields) {
     if (body[field] !== undefined) {
-      productData[field] = typeof body[field] === 'string' ? body[field].trim() : body[field];
+      productData[field] = body[field];
     }
   }
 
-  if (requireCoreFields && !productData.name) {
+  const normalizedProductData = normalizeProductFields(productData);
+
+  if (requireCoreFields && !normalizedProductData.name) {
     throw new AppError('Product name is required', 400);
   }
 
-  if (productData.price !== undefined || requireCoreFields) {
-    productData.price = parseNonNegativeNumber(productData.price, 'price', requireCoreFields);
+  if (normalizedProductData.price !== undefined || requireCoreFields) {
+    normalizedProductData.price = parseNonNegativeNumber(
+      normalizedProductData.price,
+      'price',
+      requireCoreFields
+    );
   }
 
-  if (productData.stock !== undefined) {
-    productData.stock = parseNonNegativeNumber(productData.stock, 'stock');
+  if (normalizedProductData.stock !== undefined) {
+    normalizedProductData.stock = parseNonNegativeNumber(normalizedProductData.stock, 'stock');
   }
 
-  return productData;
+  return normalizedProductData;
 };
 
 const ensurePendingStatus = (pendingProduct) => {
@@ -121,7 +128,7 @@ const buildProductPayload = (pendingProduct) => {
     public_id: image.public_id,
   }));
 
-  return productPayload;
+  return normalizeProductFields(productPayload);
 };
 
 export const submitPendingProduct = async (req, res, next) => {

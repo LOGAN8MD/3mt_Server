@@ -3,6 +3,7 @@ import cloudinary from '../config/cloudinary.js';
 import streamifier from 'streamifier';
 import mongoose from 'mongoose';
 import AppError from '../utils/AppError.js';
+import { normalizeProductFields } from '../utils/normalizeProductFields.js';
 
 const DEFAULT_SEARCH_LIMIT = 8;
 const DEFAULT_RELATED_LIMIT = 8;
@@ -317,7 +318,7 @@ export const getProductById = async (req, res, next) => {
 };
 
 export const createProduct = async (req, res, next) => {
-  const { name, type, category, subCategory, brand, description, size, model, price, stock } = req.body;
+  const productData = normalizeProductFields(req.body);
 
   if (!req.files || req.files.length === 0) {
     return next(new AppError('At least one product image is required', 400));
@@ -350,16 +351,7 @@ export const createProduct = async (req, res, next) => {
     }
 
     const newProduct = new Product({
-      name,
-      type,
-      category,
-      subCategory,
-      brand,
-      description,
-      size,
-      model,
-      price,
-      stock,
+      ...productData,
       images: uploadedImages,
     });
 
@@ -371,7 +363,7 @@ export const createProduct = async (req, res, next) => {
 };
 
 export const updateProduct = async (req, res, next) => {
-  const { name, type, category, subCategory, brand, description, size, model, price, stock } = req.body;
+  const productData = normalizeProductFields(req.body);
 
   try {
     const product = await Product.findById(req.params.id);
@@ -380,16 +372,11 @@ export const updateProduct = async (req, res, next) => {
       return next(new AppError('Product not found', 404));
     }
 
-    product.name = name || product.name;
-    product.type = type || product.type;
-    product.category = category || product.category;
-    product.subCategory = subCategory || product.subCategory;
-    product.brand = brand || product.brand;
-    product.description = description || product.description;
-    product.size = size || product.size;
-    product.model = model || product.model;
-    product.price = price || product.price;
-    product.stock = stock || product.stock;
+    for (const [field, value] of Object.entries(productData)) {
+      if (value !== undefined && value !== '') {
+        product[field] = value;
+      }
+    }
 
     // If new images uploaded, replace old ones
     if (req.files && req.files.length > 0) {
