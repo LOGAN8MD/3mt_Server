@@ -65,6 +65,7 @@ const getSafeErrorDebug = (err) => ({
   code: err?.code,
   command: err?.command,
   responseCode: err?.responseCode,
+  response: err?.response,
   statusCode: err?.statusCode,
   message: err?.message,
 });
