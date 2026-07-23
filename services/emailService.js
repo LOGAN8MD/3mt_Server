@@ -1,5 +1,8 @@
 import nodemailer from 'nodemailer';
+import dns from 'dns';
 import AppError from '../utils/AppError.js';
+
+dns.setDefaultResultOrder('ipv4first');
 
 const requiredSmtpFields = ['SMTP_HOST', 'SMTP_PORT', 'SMTP_USER', 'SMTP_PASS'];
 
@@ -17,7 +20,12 @@ export const getEmailServiceDebugInfo = () => ({
   smtpPassConfigured: Boolean(process.env.SMTP_PASS?.trim()),
   otpEmailFromConfigured: Boolean(process.env.OTP_EMAIL_FROM?.trim()),
   smtpConnectionFamily: 4,
+  smtpDnsResultOrder: 'ipv4first',
 });
+
+const lookupSmtpHostWithIpv4 = (hostname, options, callback) => {
+  dns.lookup(hostname, { ...options, family: 4 }, callback);
+};
 
 const getSmtpTransporter = () => {
   if (!hasSmtpConfig()) {
@@ -29,6 +37,7 @@ const getSmtpTransporter = () => {
     port: Number(process.env.SMTP_PORT),
     secure: process.env.SMTP_SECURE !== 'false',
     family: 4,
+    lookup: lookupSmtpHostWithIpv4,
     auth: {
       user: process.env.SMTP_USER,
       pass: process.env.SMTP_PASS,
