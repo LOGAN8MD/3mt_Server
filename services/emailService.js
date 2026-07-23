@@ -21,23 +21,42 @@ export const getEmailServiceDebugInfo = () => ({
   otpEmailFromConfigured: Boolean(process.env.OTP_EMAIL_FROM?.trim()),
   smtpConnectionFamily: 4,
   smtpDnsResultOrder: 'ipv4first',
+  smtpManualResolve4: true,
 });
 
 const lookupSmtpHostWithIpv4 = (hostname, options, callback) => {
   dns.lookup(hostname, { ...options, family: 4 }, callback);
 };
 
-const getSmtpTransporter = () => {
+const resolveSmtpHostIpv4 = async () => {
+  const smtpHost = process.env.SMTP_HOST;
+  const addresses = await dns.promises.resolve4(smtpHost);
+  const smtpIpv4 = addresses[0];
+
+  if (!smtpIpv4) {
+    throw new AppError('SMTP host IPv4 address could not be resolved.', 500);
+  }
+
+  return smtpIpv4;
+};
+
+const getSmtpTransporter = async () => {
   if (!hasSmtpConfig()) {
     throw new AppError('Email OTP is not configured. Please contact support.', 500);
   }
 
+  const smtpHost = process.env.SMTP_HOST;
+  const smtpIpv4 = await resolveSmtpHostIpv4();
+
   return nodemailer.createTransport({
-    host: process.env.SMTP_HOST,
+    host: smtpIpv4,
     port: Number(process.env.SMTP_PORT),
     secure: process.env.SMTP_SECURE !== 'false',
     family: 4,
     lookup: lookupSmtpHostWithIpv4,
+    tls: {
+      servername: smtpHost,
+    },
     auth: {
       user: process.env.SMTP_USER,
       pass: process.env.SMTP_PASS,
@@ -54,7 +73,7 @@ const escapeHtml = (value) =>
     .replace(/'/g, '&#039;');
 
 export const sendOtpEmail = async ({ to, otp, expiresInMinutes }) => {
-  const transporter = getSmtpTransporter();
+  const transporter = await getSmtpTransporter();
   const from = process.env.OTP_EMAIL_FROM || process.env.SMTP_USER;
   const safeOtp = escapeHtml(otp);
   const safeMinutes = escapeHtml(expiresInMinutes);
