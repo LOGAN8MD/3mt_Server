@@ -9,13 +9,13 @@ import {
   submitPendingProduct,
   updatePendingProductForAdmin,
 } from '../controllers/pendingProductController.js';
-import { protect, isAdmin } from '../middlewares/authMiddleware.js';
+import { allowRoles, protect, isAdmin } from '../middlewares/authMiddleware.js';
 import { upload } from '../middlewares/uploadMiddleware.js';
 
 const router = express.Router();
 
-router.post('/', protect, upload.array('images', 5), submitPendingProduct);
-router.get('/mine', protect, getMyPendingProducts);
+router.post('/', protect, allowRoles('employee', 'admin'), upload.array('images', 5), submitPendingProduct);
+router.get('/mine', protect, allowRoles('employee', 'admin'), getMyPendingProducts);
 
 router.get('/admin', protect, isAdmin, getPendingProductsForAdmin);
 router.get('/admin/:id', protect, isAdmin, getPendingProductByIdForAdmin);

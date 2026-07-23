@@ -19,12 +19,15 @@ NODE_ENV=development
 CLIENT_URLS=http://localhost:3000,http://127.0.0.1:3000,https://3mt-machine-tools.netlify.app,https://3mt-dashboard.netlify.app
 MONGO_URI=your_mongodb_connection_string
 JWT_SECRET=your_jwt_secret
+GOOGLE_CLIENT_ID=your_google_oauth_client_id
 CLOUDINARY_CLOUD_NAME=your_cloudinary_cloud_name
 CLOUDINARY_API_KEY=your_cloudinary_api_key
 CLOUDINARY_API_SECRET=your_cloudinary_api_secret
 ```
 
 `CLIENT_URLS` contains frontend origins, not backend URLs. Keep values comma-separated and omit paths and trailing slashes.
+
+`GOOGLE_CLIENT_ID` must match the OAuth client ID used by the frontend Google Sign-In button. The backend verifies Google credentials against this value before issuing a 3MT JWT.
 
 ## Commands
 

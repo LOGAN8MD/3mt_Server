@@ -9,6 +9,7 @@ import productRoutes from './routes/productRoutes.js';
 import orderRoutes from './routes/orderRoutes.js';
 import userRoutes from './routes/userRoutes.js';
 import pendingProductRoutes from './routes/pendingProductRoutes.js';
+import enquiryRoutes from './routes/enquiryRoutes.js';
 import errorHandler from './middlewares/errorMiddleware.js';
 import AppError from './utils/AppError.js';
 
@@ -17,8 +18,11 @@ connectDB();
 const PORT = process.env.PORT || 8080;
 const app = express();
 
+app.set('trust proxy', 1);
+
 const defaultAllowedOrigins = [
     'http://localhost:3000',
+    'http://localhost:3001',
     'http://127.0.0.1:3000',
     'https://3mt-machine-tools.netlify.app',
     'https://3mt-dashboard.netlify.app',
@@ -62,6 +66,7 @@ app.use('/api/users', userRoutes);
 app.use('/api/pending-products', pendingProductRoutes);
 app.use('/api/products', productRoutes);
 app.use('/api/orders', orderRoutes);
+app.use('/api/enquiries', enquiryRoutes);
 
 // Global Error Handler
 app.use(errorHandler);
