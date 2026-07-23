@@ -9,7 +9,6 @@ import {
   OTP_PURPOSES,
   verifyOtpCode,
 } from '../services/otpService.js';
-import { getEmailServiceDebugInfo } from '../services/emailService.js';
 
 const googleClient = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
 
@@ -58,41 +57,6 @@ const buildOtpResponse = (user, otpResult, message) => ({
 const forgotPasswordResponseMessage =
   'If this email is registered, password reset instructions have been sent.';
 
-const isAuthDebugEnabled = () => process.env.AUTH_DEBUG === 'true';
-
-const getSafeErrorDebug = (err) => ({
-  name: err?.name,
-  code: err?.code,
-  command: err?.command,
-  responseCode: err?.responseCode,
-  response: err?.response,
-  statusCode: err?.statusCode,
-  message: err?.message,
-});
-
-const sendRegisterDebugError = (res, err, debugSteps) => {
-  const statusCode = err instanceof AppError ? err.statusCode : 500;
-  const message = err instanceof AppError ? err.message : `Server error: ${err.message}`;
-
-  console.error('AUTH_DEBUG register failed', {
-    steps: debugSteps,
-    error: getSafeErrorDebug(err),
-  });
-
-  return res.status(statusCode).json({
-    success: false,
-    status: `${statusCode}`.startsWith('4') ? 'fail' : 'error',
-    message,
-    debug: {
-      flow: 'customer_registration',
-      steps: debugSteps,
-      failedAt: debugSteps.at(-1)?.step || 'unknown',
-      error: getSafeErrorDebug(err),
-      note: 'Temporary production debug is enabled. Remove AUTH_DEBUG after fixing OTP email delivery.',
-    },
-  });
-};
-
 const validateOtpRegistration = ({ name, password, verificationMethod, email }) => {
   if (!name?.trim()) {
     throw new AppError('Name is required', 400);
@@ -132,19 +96,6 @@ const findExistingUserByContact = async ({ email, phone }) => {
 };
 
 export const registerUser = async (req, res, next) => {
-  const debugSteps = [];
-  const addDebugStep = (step, details = {}) => {
-    if (!isAuthDebugEnabled()) {
-      return;
-    }
-
-    debugSteps.push({
-      step,
-      details,
-      at: new Date().toISOString(),
-    });
-  };
-
   const {
     name,
     firstName = '',
@@ -157,16 +108,6 @@ export const registerUser = async (req, res, next) => {
   } = req.body;
 
   try {
-    addDebugStep('register_request_received', {
-      hasName: Boolean(name?.trim()),
-      hasFirstName: Boolean(firstName?.trim()),
-      hasLastName: Boolean(lastName?.trim()),
-      hasEmail: Boolean(email?.trim()),
-      hasPhone: Boolean(phone?.trim()),
-      hasPassword: Boolean(password),
-      verificationMethod: verificationMethod || null,
-    });
-
     if (!verificationMethod) {
       const normalizedEmail = normalizeEmail(email);
 
@@ -175,10 +116,6 @@ export const registerUser = async (req, res, next) => {
       }
 
       const userExists = await User.findOne({ email: normalizedEmail });
-      addDebugStep('legacy_duplicate_email_checked', {
-        email: normalizedEmail,
-        exists: Boolean(userExists),
-      });
       if (userExists) return next(new AppError('User already exists', 400));
 
       const user = await User.create({
@@ -191,32 +128,17 @@ export const registerUser = async (req, res, next) => {
         isVerified: true,
         verifiedEmail: true,
       });
-      addDebugStep('legacy_user_created', {
-        userId: user._id,
-        email: normalizedEmail,
-      });
 
       return res.status(201).json(buildAuthResponse(user));
     }
 
     validateOtpRegistration({ name, password, verificationMethod, email });
-    addDebugStep('otp_registration_input_validated', {
-      verificationMethod,
-    });
 
     const normalizedEmail = normalizeEmail(email);
     const normalizedPhone = normalizePhone(phone);
     const userExists = await findExistingUserByContact({
       email: normalizedEmail,
       phone: normalizedPhone,
-    });
-    addDebugStep('duplicate_contact_checked', {
-      email: normalizedEmail,
-      hasPhone: Boolean(normalizedPhone),
-      exists: Boolean(userExists),
-      existingUserId: userExists?._id,
-      existingUserVerified: userExists?.isVerified,
-      existingUserRole: userExists?.role,
     });
 
     if (userExists) {
@@ -237,27 +159,8 @@ export const registerUser = async (req, res, next) => {
       verifiedEmail: false,
       verifiedPhone: false,
     });
-    addDebugStep('pending_user_created_before_otp', {
-      userId: user._id,
-      email: normalizedEmail,
-      hasPhone: Boolean(normalizedPhone),
-      isVerified: user.isVerified,
-    });
-
-    addDebugStep('smtp_configuration_checked', getEmailServiceDebugInfo());
-    addDebugStep('otp_create_and_email_send_started', {
-      userId: user._id,
-      purpose: OTP_PURPOSES.REGISTRATION,
-    });
 
     const otpResult = await createOtpVerification(user);
-    addDebugStep('otp_created_and_email_send_finished', {
-      userId: user._id,
-      destinationType: otpResult.otpVerification.destinationType,
-      destination: otpResult.otpVerification.destination,
-      expiresAt: otpResult.otpVerification.expiresAt,
-      devOtpReturned: Boolean(otpResult.devOtp),
-    });
 
     res.status(201).json({
       ...buildOtpResponse(
@@ -267,12 +170,6 @@ export const registerUser = async (req, res, next) => {
       ),
     });
   } catch (err) {
-    addDebugStep('register_failed', getSafeErrorDebug(err));
-
-    if (isAuthDebugEnabled()) {
-      return sendRegisterDebugError(res, err, debugSteps);
-    }
-
     if (err instanceof AppError) return next(err);
     next(new AppError('Server error: ' + err.message, 500));
   }

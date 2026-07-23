@@ -7,17 +7,6 @@ const requiredBrevoFields = ['BREVO_API_KEY', 'OTP_EMAIL_FROM_EMAIL'];
 const hasBrevoConfig = () =>
   requiredBrevoFields.every((field) => Boolean(process.env[field]?.trim()));
 
-export const getEmailServiceDebugInfo = () => ({
-  emailProvider: 'brevo_api',
-  brevoApiKeyConfigured: Boolean(process.env.BREVO_API_KEY?.trim()),
-  brevoApiUrl: BREVO_EMAIL_API_URL,
-  otpEmailFromEmailConfigured: Boolean(process.env.OTP_EMAIL_FROM_EMAIL?.trim()),
-  otpEmailFromDomain: process.env.OTP_EMAIL_FROM_EMAIL?.includes('@')
-    ? process.env.OTP_EMAIL_FROM_EMAIL.split('@')[1]
-    : undefined,
-  otpEmailFromNameConfigured: Boolean(process.env.OTP_EMAIL_FROM_NAME?.trim()),
-});
-
 const escapeHtml = (value) =>
   String(value)
     .replace(/&/g, '&amp;')
