@@ -6,6 +6,18 @@ const requiredSmtpFields = ['SMTP_HOST', 'SMTP_PORT', 'SMTP_USER', 'SMTP_PASS'];
 const hasSmtpConfig = () =>
   requiredSmtpFields.every((field) => Boolean(process.env[field]?.trim()));
 
+export const getEmailServiceDebugInfo = () => ({
+  smtpHostConfigured: Boolean(process.env.SMTP_HOST?.trim()),
+  smtpPortConfigured: Boolean(process.env.SMTP_PORT?.trim()),
+  smtpSecure: process.env.SMTP_SECURE || 'true',
+  smtpUserConfigured: Boolean(process.env.SMTP_USER?.trim()),
+  smtpUserDomain: process.env.SMTP_USER?.includes('@')
+    ? process.env.SMTP_USER.split('@')[1]
+    : undefined,
+  smtpPassConfigured: Boolean(process.env.SMTP_PASS?.trim()),
+  otpEmailFromConfigured: Boolean(process.env.OTP_EMAIL_FROM?.trim()),
+});
+
 const getSmtpTransporter = () => {
   if (!hasSmtpConfig()) {
     throw new AppError('Email OTP is not configured. Please contact support.', 500);
