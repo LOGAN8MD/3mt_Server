@@ -16,6 +16,7 @@ export const getEmailServiceDebugInfo = () => ({
     : undefined,
   smtpPassConfigured: Boolean(process.env.SMTP_PASS?.trim()),
   otpEmailFromConfigured: Boolean(process.env.OTP_EMAIL_FROM?.trim()),
+  smtpConnectionFamily: 4,
 });
 
 const getSmtpTransporter = () => {
@@ -27,6 +28,7 @@ const getSmtpTransporter = () => {
     host: process.env.SMTP_HOST,
     port: Number(process.env.SMTP_PORT),
     secure: process.env.SMTP_SECURE !== 'false',
+    family: 4,
     auth: {
       user: process.env.SMTP_USER,
       pass: process.env.SMTP_PASS,
