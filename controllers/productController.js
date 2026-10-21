@@ -3,13 +3,63 @@ import cloudinary from '../config/cloudinary.js';
 import streamifier from 'streamifier';
 import mongoose from 'mongoose';
 import AppError from '../utils/AppError.js';
-import { normalizeProductFields } from '../utils/normalizeProductFields.js';
+import { customerCatalogFilters } from '../utils/customerCatalog.js';
+import {
+  DEFAULT_PRODUCT_RULES,
+  validateProductRules,
+} from '../utils/productRules.js';
 
 const DEFAULT_SEARCH_LIMIT = 8;
 const DEFAULT_RELATED_LIMIT = 8;
 const MAX_QUERY_LIMIT = 100;
-const PRODUCT_CARD_FIELDS = 'name price brand category type stock images';
+const PRODUCT_CARD_FIELDS = [
+  'name',
+  'price',
+  'rentalPrice',
+  'rentPeriod',
+  'securityDeposit',
+  'brand',
+  'category',
+  'type',
+  'condition',
+  'availabilityType',
+  'availabilityStatus',
+  'availableFrom',
+  'availabilityNote',
+  'stock',
+  'images',
+].join(' ');
 const SEARCH_PRODUCT_FIELDS = `${PRODUCT_CARD_FIELDS} model`;
+const PRODUCT_WRITE_FIELDS = [
+  'name',
+  'type',
+  'condition',
+  'category',
+  'subCategory',
+  'brand',
+  'description',
+  'size',
+  'model',
+  'availabilityType',
+  'availabilityStatus',
+  'price',
+  'rentalPrice',
+  'rentPeriod',
+  'securityDeposit',
+  'availableFrom',
+  'availabilityNote',
+  'stock',
+];
+
+const pickProductWriteFields = (body) => {
+  const productData = {};
+
+  for (const field of PRODUCT_WRITE_FIELDS) {
+    if (body[field] !== undefined) productData[field] = body[field];
+  }
+
+  return productData;
+};
 
 const escapeRegex = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
@@ -69,6 +119,8 @@ const getSortOption = (sort) => {
     oldest: { createdAt: 1 },
     priceAsc: { price: 1, name: 1 },
     priceDesc: { price: -1, name: 1 },
+    rentalPriceAsc: { rentalPrice: 1, name: 1 },
+    rentalPriceDesc: { rentalPrice: -1, name: 1 },
     nameAsc: { name: 1 },
     nameDesc: { name: -1 },
   };
@@ -76,7 +128,7 @@ const getSortOption = (sort) => {
   if (!sort) return null;
   if (!sortOptions[sort]) {
     throw new AppError(
-      'sort must be one of: newest, oldest, priceAsc, priceDesc, nameAsc, nameDesc',
+      'sort must be one of: newest, oldest, priceAsc, priceDesc, rentalPriceAsc, rentalPriceDesc, nameAsc, nameDesc',
       400
     );
   }
@@ -84,16 +136,25 @@ const getSortOption = (sort) => {
   return sortOptions[sort];
 };
 
-export const getProducts = async (req, res, next) => {
+export const getProducts = (req, res, next) => listProducts(req, res, next, false);
+
+export const getInventoryProducts = (req, res, next) => listProducts(req, res, next, true);
+
+const listProducts = async (req, res, next, inventory) => {
   try {
-    const filters = [];
+    const filters = inventory ? [] : customerCatalogFilters(req.query.condition);
     const searchTerm = typeof req.query.search === 'string' ? req.query.search.trim() : '';
 
     if (searchTerm) {
       filters.push(buildTextSearchFilter(searchTerm));
     }
 
-    for (const field of ['category', 'type', 'brand']) {
+    for (const field of [
+      'category',
+      'type',
+      'brand',
+      ...(inventory ? ['condition'] : []),
+    ]) {
       const value = typeof req.query[field] === 'string' ? req.query[field].trim() : '';
       if (value) {
         filters.push({
@@ -101,6 +162,39 @@ export const getProducts = async (req, res, next) => {
         });
       }
     }
+
+    const options = {};
+    for (const [field, allowed] of Object.entries({
+      availabilityType: ['sale', 'rent', 'both'],
+      availabilityStatus: ['available', 'on_rent', 'unavailable', 'sold'],
+      rentPeriod: ['day', 'week', 'month'],
+    })) {
+      const raw = req.query[field];
+      if (raw === undefined || raw === '') continue;
+      if (typeof raw !== 'string' || !allowed.includes(raw.trim().toLowerCase())) {
+        throw new AppError(`${field} must be one of: ${allowed.join(', ')}`, 400);
+      }
+      const value = raw.trim().toLowerCase();
+      options[field] = value;
+      filters.push({ [field]: field === 'availabilityType' && !inventory && value !== 'both'
+        ? { $in: [value, 'both', ...(value === 'sale' ? [null, ''] : [])] }
+        : value });
+    }
+
+    const minRental = parseNonNegativeNumber(req.query.minRentalPrice, 'minRentalPrice');
+    const maxRental = parseNonNegativeNumber(req.query.maxRentalPrice, 'maxRentalPrice');
+    const rentalSort = ['rentalPriceAsc', 'rentalPriceDesc'].includes(req.query.sort);
+    if (minRental !== null || maxRental !== null || rentalSort) {
+      if (!options.rentPeriod) throw new AppError('rentPeriod is required for rental price filtering or sorting', 400);
+      if (minRental !== null && maxRental !== null && minRental > maxRental) {
+        throw new AppError('minRentalPrice must be less than or equal to maxRentalPrice', 400);
+      }
+      const rentalPrice = { $type: 'number' };
+      if (minRental !== null) rentalPrice.$gte = minRental;
+      if (maxRental !== null) rentalPrice.$lte = maxRental;
+      filters.push({ rentalPrice });
+    }
+    if (options.rentPeriod) filters.push({ availabilityType: { $in: ['rent', 'both'] } });
 
     const minPrice = parseNonNegativeNumber(req.query.minPrice, 'minPrice');
     const maxPrice = parseNonNegativeNumber(req.query.maxPrice, 'maxPrice');
@@ -181,21 +275,45 @@ export const getProducts = async (req, res, next) => {
 export const getProductFilterOptions = async (req, res, next) => {
   try {
     const cleanOptions = (values) =>
-      values
-        .filter((value) => typeof value === 'string' && value.trim())
-        .map((value) => value.trim())
-        .sort((a, b) => a.localeCompare(b));
+      Array.from(
+        new Set(
+          values
+            .filter((value) => typeof value === 'string' && value.trim())
+            .map((value) => value.trim())
+        )
+      ).sort((a, b) => a.localeCompare(b));
 
-    const [brands, types, categories, priceStats] = await Promise.all([
+    const [
+      brands,
+      types,
+      categories,
+      conditions,
+      availabilityTypes,
+      availabilityStatuses,
+      priceStats,
+      rentalPriceStats,
+    ] = await Promise.all([
       Product.distinct('brand'),
       Product.distinct('type'),
       Product.distinct('category'),
+      Product.distinct('condition'),
+      Product.distinct('availabilityType'),
+      Product.distinct('availabilityStatus'),
       Product.aggregate([
         {
           $group: {
             _id: null,
             min: { $min: '$price' },
             max: { $max: '$price' },
+          },
+        },
+      ]),
+      Product.aggregate([
+        {
+          $group: {
+            _id: null,
+            min: { $min: '$rentalPrice' },
+            max: { $max: '$rentalPrice' },
           },
         },
       ]),
@@ -210,12 +328,31 @@ export const getProductFilterOptions = async (req, res, next) => {
           min: 0,
           max: 0,
         };
+    const rentalPriceRange = rentalPriceStats[0]
+      ? {
+          min: rentalPriceStats[0].min ?? 0,
+          max: rentalPriceStats[0].max ?? 0,
+        }
+      : {
+          min: 0,
+          max: 0,
+        };
 
     res.json({
       brands: cleanOptions(brands),
       types: cleanOptions(types),
       categories: cleanOptions(categories),
+      conditions: cleanOptions([...conditions, DEFAULT_PRODUCT_RULES.condition]),
+      availabilityTypes: cleanOptions([
+        ...availabilityTypes,
+        DEFAULT_PRODUCT_RULES.availabilityType,
+      ]),
+      availabilityStatuses: cleanOptions([
+        ...availabilityStatuses,
+        DEFAULT_PRODUCT_RULES.availabilityStatus,
+      ]),
       priceRange,
+      rentalPriceRange,
     });
   } catch (err) {
     next(new AppError('Failed to fetch product filter options: ' + err.message, 500));
@@ -230,7 +367,9 @@ export const searchProducts = async (req, res, next) => {
     }
 
     const limit = parseLimit(req.query.limit, DEFAULT_SEARCH_LIMIT);
-    const products = await Product.find(buildTextSearchFilter(searchTerm))
+    const products = await Product.find({
+      $and: [...customerCatalogFilters(), buildTextSearchFilter(searchTerm)],
+    })
       .select(SEARCH_PRODUCT_FIELDS)
       .slice('images', 1)
       .sort({ name: 1 })
@@ -251,7 +390,7 @@ export const getRelatedProducts = async (req, res, next) => {
     }
 
     const product = await Product.findById(req.params.id)
-      .select('category subCategory type')
+      .select('category subCategory type condition')
       .lean();
 
     if (!product) {
@@ -289,6 +428,7 @@ export const getRelatedProducts = async (req, res, next) => {
     const products = await Product.find({
       _id: { $ne: product._id },
       $or: relatedFilters,
+      $and: customerCatalogFilters(product.condition === 'used' ? 'used' : 'new'),
     })
       .select(PRODUCT_CARD_FIELDS)
       .slice('images', 1)
@@ -318,13 +458,13 @@ export const getProductById = async (req, res, next) => {
 };
 
 export const createProduct = async (req, res, next) => {
-  const productData = normalizeProductFields(req.body);
-
-  if (!req.files || req.files.length === 0) {
-    return next(new AppError('At least one product image is required', 400));
-  }
-
   try {
+    const productData = validateProductRules(pickProductWriteFields(req.body));
+
+    if (!req.files || req.files.length === 0) {
+      throw new AppError('At least one product image is required', 400);
+    }
+
     const uploadedImages = [];
     const streamUpload = (fileBuffer) => {
       return new Promise((resolve, reject) => {
@@ -358,13 +498,12 @@ export const createProduct = async (req, res, next) => {
     await newProduct.save();
     res.status(201).json(newProduct);
   } catch (err) {
+    if (err instanceof AppError) return next(err);
     next(new AppError('Failed to create product: ' + err.message, 500));
   }
 };
 
 export const updateProduct = async (req, res, next) => {
-  const productData = normalizeProductFields(req.body);
-
   try {
     const product = await Product.findById(req.params.id);
 
@@ -372,10 +511,14 @@ export const updateProduct = async (req, res, next) => {
       return next(new AppError('Product not found', 404));
     }
 
-    for (const [field, value] of Object.entries(productData)) {
-      if (value !== undefined && value !== '') {
-        product[field] = value;
-      }
+    const requestedUpdates = pickProductWriteFields(req.body);
+    const validatedProductData = validateProductRules({
+      ...product.toObject(),
+      ...requestedUpdates,
+    });
+
+    for (const field of Object.keys(requestedUpdates)) {
+      product[field] = validatedProductData[field];
     }
 
     // If new images uploaded, replace old ones
@@ -419,6 +562,7 @@ export const updateProduct = async (req, res, next) => {
     res.json(updatedProduct);
 
   } catch (err) {
+    if (err instanceof AppError) return next(err);
     next(new AppError('Failed to update product: ' + err.message, 500));
   }
 };

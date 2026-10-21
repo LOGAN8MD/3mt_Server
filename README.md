@@ -1,6 +1,6 @@
 # 3MT Server
 
-Express and MongoDB backend for authentication, products, product images, and orders.
+Express and MongoDB backend for authentication, products, product review requests, product images, enquiries, and orders.
 
 ## Requirements
 
@@ -36,13 +36,31 @@ npm install
 npm run dev
 npm start
 npm run check
+npm test
 npm run verify
 ```
 
 - `npm run dev` starts Nodemon for local development.
 - `npm start` runs the server normally.
 - `npm run check` syntax-checks every first-party server module without connecting to external services.
-- `npm run verify` runs the server verification check.
+- `npm test` runs the Node test suite without connecting to MongoDB or Cloudinary.
+- `npm run verify` runs syntax checks followed by the complete backend test suite.
+
+## Second-Hand Product Workflow
+
+The backend supports new and second-hand products without changing the existing product endpoints.
+
+- `condition`: `new` or `used`
+- `availabilityType`: `sale`, `rent`, or `both`
+- `availabilityStatus`: `available`, `on_rent`, `unavailable`, or `sold`
+- Rental listings require `rentalPrice` and `rentPeriod` (`day`, `week`, or `month`).
+- Sale listings require a positive `price`.
+- Category and brand values are trimmed and converted to uppercase before persistence.
+- Existing records without the new fields remain compatible through the defaults `new`, `sale`, and `available`.
+
+Employees submit products through `POST /api/pending-products`. New requests always start with listing availability `available` and review status `pending`. An admin may edit the request and approve it; approval validates and copies the product fields and Cloudinary image references into the main `Product` collection. The `PendingProduct` record remains as review history until an admin deletes it.
+
+The backend tests cover shared validation, employee submission preparation, admin approval payload creation, Product and PendingProduct schemas, and legacy product defaults.
 
 ## Health Check
 

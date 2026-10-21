@@ -2,6 +2,7 @@ import mongoose from 'mongoose';
 import Enquiry from '../models/Enquiry.js';
 import Product from '../models/Product.js';
 import AppError from '../utils/AppError.js';
+import { enquiryOfferSnapshot } from '../utils/enquiryOffer.js';
 
 const allowedSources = ['product_detail', 'cart', 'contact'];
 const allowedStatuses = ['new', 'contacted', 'converted', 'closed', 'spam'];
@@ -27,6 +28,7 @@ const normalizeProductInput = (item) => {
   return {
     productId: productId.toString(),
     quantity: parseQuantity(item?.quantity ?? 1),
+    intent: item?.intent ?? 'sale',
   };
 };
 
@@ -40,7 +42,7 @@ const buildCustomerSnapshot = (customer) => ({
   authProvider: customer?.authProvider || '',
 });
 
-const buildEnquiryProducts = async (items) => {
+const buildEnquiryProducts = async (items, source) => {
   if (!Array.isArray(items) || items.length === 0) {
     throw new AppError('At least one enquiry product is required', 400);
   }
@@ -51,6 +53,8 @@ const buildEnquiryProducts = async (items) => {
 
   const normalizedItems = items.map(normalizeProductInput);
   const productIds = [...new Set(normalizedItems.map((item) => item.productId))];
+  if (productIds.length !== normalizedItems.length) throw new AppError('Duplicate enquiry products are not allowed', 400);
+  if (source === 'cart' && normalizedItems.some((item) => item.intent !== 'sale')) throw new AppError('Cart enquiries support purchases only', 400);
   const products = await Product.find({ _id: { $in: productIds } }).lean();
   const productMap = new Map(products.map((product) => [product._id.toString(), product]));
 
@@ -61,8 +65,7 @@ const buildEnquiryProducts = async (items) => {
       throw new AppError('One or more enquiry products were not found', 404);
     }
 
-    const priceSnapshot = Number(product.price || 0);
-    const lineTotal = priceSnapshot * item.quantity;
+    const offerSnapshot = enquiryOfferSnapshot(product, item.quantity, item.intent);
 
     return {
       product: product._id,
@@ -71,9 +74,8 @@ const buildEnquiryProducts = async (items) => {
       categorySnapshot: product.category || '',
       brandSnapshot: product.brand || '',
       modelSnapshot: product.model || '',
-      priceSnapshot,
+      ...offerSnapshot,
       quantity: item.quantity,
-      lineTotal,
     };
   });
 };
@@ -174,6 +176,13 @@ const fetchEnquiryList = (filter, limit) =>
     .limit(limit)
     .lean();
 
+export const validateEnquiry = async (req, res, next) => {
+  try {
+    if (!allowedSources.includes(req.body.source)) throw new AppError('Invalid enquiry source', 400);
+    res.json({ products: await buildEnquiryProducts(req.body.products, req.body.source) });
+  } catch (error) { next(error); }
+};
+
 export const createEnquiry = async (req, res, next) => {
   try {
     const { products, source, message = '' } = req.body;
@@ -182,7 +191,7 @@ export const createEnquiry = async (req, res, next) => {
       return next(new AppError(`source must be one of: ${allowedSources.join(', ')}`, 400));
     }
 
-    const enquiryProducts = await buildEnquiryProducts(products);
+    const enquiryProducts = await buildEnquiryProducts(products, source);
     const totalEstimatedPrice = enquiryProducts.reduce(
       (total, item) => total + item.lineTotal,
       0
@@ -392,6 +401,8 @@ export const getProductDemandStats = async (req, res, next) => {
           type: { $first: '$products.typeSnapshot' },
           brand: { $first: '$products.brandSnapshot' },
           totalEnquiries: { $sum: 1 },
+          rentalEnquiries: { $sum: { $cond: [{ $eq: ['$products.intent', 'rent'] }, 1, 0] } },
+          purchaseEnquiries: { $sum: { $cond: [{ $eq: ['$products.intent', 'rent'] }, 0, 1] } },
           totalQuantityRequested: { $sum: '$products.quantity' },
           totalEstimatedValue: { $sum: '$products.lineTotal' },
           latestEnquiryDate: { $max: '$createdAt' },

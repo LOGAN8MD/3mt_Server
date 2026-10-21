@@ -1,6 +1,7 @@
 import express from 'express';
 import {
   createEnquiry,
+  validateEnquiry,
   deleteEnquiry,
   getCustomerEnquiries,
   getEnquiries,
@@ -13,6 +14,7 @@ import { isAdmin, protect } from '../middlewares/authMiddleware.js';
 
 const router = express.Router();
 
+router.post('/validate', protect, validateEnquiry);
 router.post('/', protect, createEnquiry);
 router.get('/', protect, isAdmin, getEnquiries);
 router.get('/stats/products', protect, isAdmin, getProductDemandStats);

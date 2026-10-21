@@ -1,6 +1,7 @@
 import express from 'express';
 import {
   getProducts,
+  getInventoryProducts,
   getProductFilterOptions,
   searchProducts,
   getRelatedProducts,
@@ -9,12 +10,13 @@ import {
   updateProduct,
   deleteProduct,
 } from '../controllers/productController.js';
-import { protect, isAdmin } from '../middlewares/authMiddleware.js';
+import { protect, isAdmin, allowRoles } from '../middlewares/authMiddleware.js';
 import { upload } from '../middlewares/uploadMiddleware.js';
 
 const router = express.Router();
 
 router.get('/', getProducts);
+router.get('/inventory', protect, allowRoles('admin', 'employee'), getInventoryProducts);
 router.get('/search', searchProducts);
 router.get('/filter-options', getProductFilterOptions);
 router.get('/:id/related', getRelatedProducts);

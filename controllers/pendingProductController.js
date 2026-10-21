@@ -4,21 +4,14 @@ import cloudinary from '../config/cloudinary.js';
 import PendingProduct from '../models/PendingProduct.js';
 import Product from '../models/Product.js';
 import AppError from '../utils/AppError.js';
-import { normalizeProductFields } from '../utils/normalizeProductFields.js';
+import {
+  buildApprovedProductPayload,
+  pickPendingProductFields,
+  preparePendingProductSubmission,
+  validatePendingProductData,
+} from '../utils/pendingProductWorkflow.js';
 
 const pendingProductStatuses = ['pending', 'approved', 'rejected'];
-const editableProductFields = [
-  'name',
-  'type',
-  'category',
-  'subCategory',
-  'brand',
-  'description',
-  'size',
-  'model',
-  'price',
-  'stock',
-];
 
 const uploadImage = (fileBuffer) =>
   new Promise((resolve, reject) => {
@@ -57,57 +50,10 @@ const deleteImages = async (images = []) => {
   }
 };
 
-const parseNonNegativeNumber = (value, fieldName, required = false) => {
-  if (value === undefined || value === null || value === '') {
-    if (required) {
-      throw new AppError(`${fieldName} is required`, 400);
-    }
-
-    return undefined;
-  }
-
-  const parsedValue = Number(value);
-  if (!Number.isFinite(parsedValue) || parsedValue < 0) {
-    throw new AppError(`${fieldName} must be a non-negative number`, 400);
-  }
-
-  return parsedValue;
-};
-
 const validateObjectId = (id, fieldName = 'id') => {
   if (!mongoose.isValidObjectId(id)) {
     throw new AppError(`Invalid ${fieldName}`, 400);
   }
-};
-
-const pickProductFields = (body, requireCoreFields = false) => {
-  const productData = {};
-
-  for (const field of editableProductFields) {
-    if (body[field] !== undefined) {
-      productData[field] = body[field];
-    }
-  }
-
-  const normalizedProductData = normalizeProductFields(productData);
-
-  if (requireCoreFields && !normalizedProductData.name) {
-    throw new AppError('Product name is required', 400);
-  }
-
-  if (normalizedProductData.price !== undefined || requireCoreFields) {
-    normalizedProductData.price = parseNonNegativeNumber(
-      normalizedProductData.price,
-      'price',
-      requireCoreFields
-    );
-  }
-
-  if (normalizedProductData.stock !== undefined) {
-    normalizedProductData.stock = parseNonNegativeNumber(normalizedProductData.stock, 'stock');
-  }
-
-  return normalizedProductData;
 };
 
 const ensurePendingStatus = (pendingProduct) => {
@@ -116,24 +62,9 @@ const ensurePendingStatus = (pendingProduct) => {
   }
 };
 
-const buildProductPayload = (pendingProduct) => {
-  const productPayload = {};
-
-  for (const field of editableProductFields) {
-    productPayload[field] = pendingProduct[field];
-  }
-
-  productPayload.images = pendingProduct.images.map((image) => ({
-    url: image.url,
-    public_id: image.public_id,
-  }));
-
-  return normalizeProductFields(productPayload);
-};
-
 export const submitPendingProduct = async (req, res, next) => {
   try {
-    const productData = pickProductFields(req.body, true);
+    const productData = preparePendingProductSubmission(req.body);
 
     if (!req.files || req.files.length === 0) {
       return next(new AppError('At least one product image is required', 400));
@@ -239,11 +170,17 @@ export const updatePendingProductForAdmin = async (req, res, next) => {
 
     ensurePendingStatus(pendingProduct);
 
-    const productData = pickProductFields(req.body);
-    for (const [field, value] of Object.entries(productData)) {
-      if (value !== undefined) {
-        pendingProduct[field] = value;
-      }
+    const requestedUpdates = pickPendingProductFields(req.body);
+    const validatedProductData = validatePendingProductData(
+      {
+        ...pickPendingProductFields(pendingProduct.toObject()),
+        ...requestedUpdates,
+      },
+      true
+    );
+
+    for (const field of Object.keys(requestedUpdates)) {
+      pendingProduct[field] = validatedProductData[field];
     }
 
     if (req.body.adminNote !== undefined) {
@@ -313,7 +250,7 @@ export const approvePendingProductForAdmin = async (req, res, next) => {
       return next(new AppError('Pending product must have at least one image before approval', 400));
     }
 
-    const createdProduct = await Product.create(buildProductPayload(pendingProduct));
+    const createdProduct = await Product.create(buildApprovedProductPayload(pendingProduct));
 
     pendingProduct.status = 'approved';
     pendingProduct.reviewedBy = req.user._id;

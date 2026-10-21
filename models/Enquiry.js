@@ -37,6 +37,15 @@ const enquiryProductSchema = new mongoose.Schema(
       required: true,
       min: 0,
     },
+    intent: { type: String, enum: ['sale', 'rent'], default: 'sale' },
+    conditionSnapshot: { type: String, enum: ['new', 'used'], default: 'new' },
+    availabilityStatusSnapshot: {
+      type: String,
+      enum: ['available', 'on_rent', 'unavailable', 'sold'],
+    },
+    rentalPriceSnapshot: { type: Number, min: 0 },
+    rentPeriodSnapshot: { type: String, enum: ['day', 'week', 'month'] },
+    securityDepositSnapshot: { type: Number, min: 0 },
     quantity: {
       type: Number,
       required: true,
