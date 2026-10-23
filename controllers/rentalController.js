@@ -336,8 +336,6 @@ export const updateRentalDraft = async (req, res, next) => {
       performedBy: req.user._id,
     });
     await rental.save();
-    claimedMachine = null;
-    await createRentalLifecycleReminders(rental, req.user._id);
 
     res.json(await populatedRental(rental._id));
   } catch (error) {
@@ -365,6 +363,8 @@ export const activateRental = async (req, res, next) => {
       performedBy: req.user._id,
     });
     await rental.save();
+    claimedMachine = null;
+    await createRentalLifecycleReminders(rental, req.user._id);
 
     res.json(await populatedRental(rental._id));
   } catch (error) {
