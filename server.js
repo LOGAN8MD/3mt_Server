@@ -10,11 +10,15 @@ import orderRoutes from './routes/orderRoutes.js';
 import userRoutes from './routes/userRoutes.js';
 import pendingProductRoutes from './routes/pendingProductRoutes.js';
 import enquiryRoutes from './routes/enquiryRoutes.js';
+import rentalRoutes from './routes/rentalRoutes.js';
+import machineSaleRoutes from './routes/machineSaleRoutes.js';
+import reminderRoutes from './routes/reminderRoutes.js';
 import errorHandler from './middlewares/errorMiddleware.js';
 import AppError from './utils/AppError.js';
+import { processReminderEmails, startReminderProcessor, stopReminderProcessor, validCronSecret } from './services/reminderProcessor.js';
 
 
-connectDB();
+const databaseReady = connectDB();
 const PORT = process.env.PORT || 8080;
 const app = express();
 
@@ -67,8 +71,27 @@ app.use('/api/pending-products', pendingProductRoutes);
 app.use('/api/products', productRoutes);
 app.use('/api/orders', orderRoutes);
 app.use('/api/enquiries', enquiryRoutes);
+app.use('/api/rentals', rentalRoutes);
+app.use('/api/machine-sales', machineSaleRoutes);
+app.post('/api/reminder-jobs/process', async (req, res, next) => {
+    if (!validCronSecret(req.headers.authorization, process.env.REMINDER_CRON_SECRET)) {
+        return next(new AppError('Invalid reminder job credentials', 401));
+    }
+    try {
+        await databaseReady;
+        res.json(await processReminderEmails());
+    } catch (error) { next(error); }
+});
+app.use('/api/reminders', reminderRoutes);
 
 // Global Error Handler
 app.use(errorHandler);
 
 app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+databaseReady.then(startReminderProcessor);
+for (const signal of ['SIGTERM', 'SIGINT']) {
+    process.once(signal, () => {
+        stopReminderProcessor();
+        process.exit(0);
+    });
+}
