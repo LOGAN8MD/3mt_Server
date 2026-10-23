@@ -8,7 +8,26 @@ import {
 
 const UNSENT_OCCURRENCE_STATUSES = ['pending', 'scheduled', 'processing', 'failed'];
 
-const upsertPlan = async ({ definition, occurrence }) => {
+export const buildOccurrenceUpsertDocument = (occurrence, definitionId) => {
+  const selectedChannels = new Set(occurrence.channels || []);
+
+  return {
+    ...occurrence,
+    definition: definitionId,
+    emailDelivery: {
+      ...occurrence.emailDelivery,
+      status: occurrence.emailDelivery?.status
+        || (selectedChannels.has('email') ? 'pending' : 'not_selected'),
+    },
+    whatsappDelivery: {
+      ...occurrence.whatsappDelivery,
+      status: occurrence.whatsappDelivery?.status
+        || (selectedChannels.has('whatsapp') ? 'pending' : 'not_selected'),
+    },
+  };
+};
+
+export const upsertPlan = async ({ definition, occurrence }) => {
   const savedDefinition = await ReminderDefinition.findOneAndUpdate(
     { definitionCode: definition.definitionCode },
     { $setOnInsert: definition },
@@ -18,10 +37,7 @@ const upsertPlan = async ({ definition, occurrence }) => {
   return ReminderOccurrence.findOneAndUpdate(
     { occurrenceKey: occurrence.occurrenceKey },
     {
-      $setOnInsert: {
-        ...occurrence,
-        definition: savedDefinition._id,
-      },
+      $setOnInsert: buildOccurrenceUpsertDocument(occurrence, savedDefinition._id),
     },
     { new: true, upsert: true, runValidators: true, setDefaultsOnInsert: true }
   );

@@ -82,6 +82,8 @@ MongoDB `Date` fields hold UTC instants. Admin-entered India local date/time val
 
 Rental activation now creates an idempotent confirmation occurrence plus default return occurrences at 12 hours and 1 hour before the expected return time. If a default time has already passed for a short rental, its occurrence is retained as `missed` for an honest audit trail. Extending a rental cancels its unsent old return occurrences and creates a new schedule version; returning or cancelling a rental cancels all remaining unsent reminder work.
 
+Reminder occurrence upserts explicitly store each selected channel as `pending` and each unselected channel as `not_selected`. This initialization is part of the database update payload and does not depend on document middleware, so automatic email processing and manual WhatsApp readiness remain consistent for lifecycle and restored reminders.
+
 Default reminder definitions and occurrences contain rendered English and Hindi subjects and bodies. They show India-time rental dates, machine and rental identifiers, rental amount, amount paid, remaining balance, and security deposit as separate Indian-rupee values. The shared template utility also validates and combines future admin-authored bilingual messages for rental and standalone reminders.
 
 Provider delivery is not part of this stage. Occurrences remain durable MongoDB work items until the protected processor and email/WhatsApp integrations are connected in later tasks.
