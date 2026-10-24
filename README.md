@@ -84,6 +84,8 @@ Rental activation now creates an idempotent confirmation occurrence plus default
 
 Reminder occurrence upserts explicitly store each selected channel as `pending` and each unselected channel as `not_selected`. This initialization is part of the database update payload and does not depend on document middleware, so automatic email processing and manual WhatsApp readiness remain consistent for lifecycle and restored reminders.
 
+The multi-reminder plan foundation normalizes rental and standalone schedules before persistence. Rental plans support the existing default 12-hour/1-hour schedule or up to 20 custom positive offsets before return. Standalone plans use a selected start/end period and the same bounded offset rows. Every custom row owns its channels and bilingual content; the backend rejects missing contact details, duplicate timings, past sends, and sends outside the selected period. Existing single-reminder APIs remain compatible while complete plan persistence is added in the next task.
+
 Default reminder definitions and occurrences contain rendered English and Hindi subjects and bodies. They show India-time rental dates, machine and rental identifiers, rental amount, amount paid, remaining balance, and security deposit as separate Indian-rupee values. The shared template utility also validates and combines future admin-authored bilingual messages for rental and standalone reminders.
 
 Automatic Brevo email and admin-confirmed manual WhatsApp delivery are connected. Occurrences remain durable MongoDB work items, while the protected processor reconstructs process-local timers after startup or cron wakeup.
