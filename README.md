@@ -86,7 +86,7 @@ Reminder occurrence upserts explicitly store each selected channel as `pending` 
 
 Default reminder definitions and occurrences contain rendered English and Hindi subjects and bodies. They show India-time rental dates, machine and rental identifiers, rental amount, amount paid, remaining balance, and security deposit as separate Indian-rupee values. The shared template utility also validates and combines future admin-authored bilingual messages for rental and standalone reminders.
 
-Provider delivery is not part of this stage. Occurrences remain durable MongoDB work items until the protected processor and email/WhatsApp integrations are connected in later tasks.
+Automatic Brevo email and admin-confirmed manual WhatsApp delivery are connected. Occurrences remain durable MongoDB work items, while the protected processor reconstructs process-local timers after startup or cron wakeup.
 
 ### Admin Reminder APIs
 
@@ -175,7 +175,7 @@ Admin endpoints:
 
 Enable automatic email on the deployed backend with `REMINDER_EMAIL_AUTOMATION_ENABLED=true`, the existing Brevo sender configuration, and a random `REMINDER_CRON_SECRET` of at least 32 characters. The example keeps automation disabled to prevent accidental customer sends during development.
 
-Configure the external cron service to POST `/api/reminder-jobs/process` every five minutes using `Authorization: Bearer <REMINDER_CRON_SECRET>`. Use a request timeout long enough for Render cold starts and retry failed requests. Never put this secret in dashboard environment variables or a query string. The endpoint awaits the database connection, schedules work, and returns promptly. Live cron configuration is a deployment step, not included in local verification.
+Configure the external cron service to POST `/api/reminder-jobs/process` every five minutes using `Authorization: Bearer <REMINDER_CRON_SECRET>`. Use a request timeout long enough for Render cold starts and retry failed requests. Never put this secret in dashboard environment variables or a query string. The endpoint awaits the database connection, schedules work, and returns promptly. The production cron, Render wakeup, Brevo email, and manual WhatsApp flow were verified on 24 October 2026. See `RENTAL_REMINDER_VERIFICATION.md` for the repeatable release checklist.
 
 While awake, the backend scans every 30 seconds and sets timers for due emails within ten minutes. Rental activation requests also trigger a scan. Timers are deduplicated locally, email delivery is atomically claimed across instances, and sends are limited to three concurrent calls per process. Paused/cancelled/old-version reminders and inactive rentals are rechecked before delivery. Automatic emails more than ten minutes late are skipped; manual WhatsApp remains independent. Shutdown clears timers, and startup reconstructs pending timers. Interrupted/ambiguous provider requests become `uncertain` and are not automatically retried; inspect Brevo before taking further action. Do not treat the custom email idempotency header as a guarantee of provider-side deduplication.
 
