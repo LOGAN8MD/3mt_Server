@@ -7,7 +7,7 @@ import NotificationDeliveryAttempt from '../models/NotificationDeliveryAttempt.j
 import { buildManualWhatsappLink, prepareManualWhatsapp, markManualWhatsappSent } from '../services/reminderWhatsappService.js';
 import { requireEligibleReminder } from '../services/reminderEligibilityService.js';
 import { deriveOccurrenceDeliveryStatus, deliverReminderEmail } from '../services/reminderEmailDeliveryService.js';
-import { createReminderTimerQueue, validCronSecret } from '../services/reminderProcessor.js';
+import { cancelReminderTimers, createReminderTimerQueue, validCronSecret } from '../services/reminderProcessor.js';
 
 const content = { bodyEnglish: 'Return Drill & pay Rs 500', bodyHindi: '\u0928\u092e\u0938\u094d\u0924\u0947' };
 const record = () => ({
@@ -120,6 +120,15 @@ test('timer cleanup also runs when delivery fails', async () => {
   queue.schedule('a', new Date());
   await assert.rejects(callback(), /failure/);
   assert.deepEqual(queue.ids(), []);
+});
+
+test('lifecycle cleanup immediately cancels unique scheduled occurrence timers', () => {
+  const cancelled = [];
+  const timerQueue = { cancel: (id) => cancelled.push(id) };
+
+  cancelReminderTimers(['occurrence-a', 'occurrence-b', 'occurrence-a'], { timerQueue });
+
+  assert.deepEqual(cancelled, ['occurrence-a', 'occurrence-b']);
 });
 
 test('cron endpoint authentication rejects missing, short and mismatched secrets', () => {

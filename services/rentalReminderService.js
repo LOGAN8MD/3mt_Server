@@ -1,6 +1,6 @@
 import ReminderDefinition from '../models/ReminderDefinition.js';
 import ReminderOccurrence from '../models/ReminderOccurrence.js';
-import { processReminderEmails } from './reminderProcessor.js';
+import { cancelReminderTimers, processReminderEmails } from './reminderProcessor.js';
 import {
   buildDefaultReturnReminderPlans,
   buildRentalActivationReminderPlan,
@@ -74,6 +74,10 @@ export const rescheduleRentalReturnReminders = async (
   const occurrences = [];
   for (const definition of definitions) {
     const nextVersion = definition.scheduleVersion + 1;
+    const supersededOccurrences = await ReminderOccurrence.find({
+      definition: definition._id,
+      status: { $in: UNSENT_OCCURRENCE_STATUSES },
+    }).select('_id').lean();
     await ReminderOccurrence.updateMany(
       {
         definition: definition._id,
@@ -90,6 +94,7 @@ export const rescheduleRentalReturnReminders = async (
         $unset: { lockedAt: 1, lockExpiresAt: 1, nextAttemptAt: 1 },
       }
     );
+    cancelReminderTimers(supersededOccurrences.map(({ _id }) => _id));
 
     definition.scheduleVersion = nextVersion;
     definition.status = 'active';
@@ -129,6 +134,11 @@ export const cancelRentalReminders = async (
 
   if (definitionIds.length === 0) return { definitionsCancelled: 0, occurrencesCancelled: 0 };
 
+  const unsentOccurrences = await ReminderOccurrence.find({
+    definition: { $in: definitionIds },
+    status: { $in: UNSENT_OCCURRENCE_STATUSES },
+  }).select('_id').lean();
+
   const [definitionResult, occurrenceResult] = await Promise.all([
     ReminderDefinition.updateMany(
       { _id: { $in: definitionIds } },
@@ -159,6 +169,7 @@ export const cancelRentalReminders = async (
       }
     ),
   ]);
+  cancelReminderTimers(unsentOccurrences.map(({ _id }) => _id));
 
   return {
     definitionsCancelled: definitionResult.modifiedCount,
@@ -178,6 +189,10 @@ export const restoreDefaultRentalReturnReminders = async (
   }).select('_id');
   const activeIds = activeDefinitions.map((definition) => definition._id);
   if (activeIds.length) {
+    const replacedOccurrences = await ReminderOccurrence.find({
+      definition: { $in: activeIds },
+      status: { $in: UNSENT_OCCURRENCE_STATUSES },
+    }).select('_id').lean();
     await ReminderDefinition.updateMany(
       { _id: { $in: activeIds } },
       {
@@ -203,6 +218,7 @@ export const restoreDefaultRentalReturnReminders = async (
         $unset: { lockedAt: 1, lockExpiresAt: 1, nextAttemptAt: 1 },
       }
     );
+    cancelReminderTimers(replacedOccurrences.map(({ _id }) => _id));
   }
 
   const initialPlans = buildDefaultReturnReminderPlans(rental, adminId, { now });

@@ -68,6 +68,10 @@ const queue = createReminderTimerQueue({ execute: deliverDue });
 let scanning = false;
 let interval;
 
+export const cancelReminderTimers = (occurrenceIds, { timerQueue = queue } = {}) => {
+  for (const id of new Set((occurrenceIds || []).map(String))) timerQueue.cancel(id);
+};
+
 export const processReminderEmails = async () => {
   if (!automaticEmailEnabled()) return { enabled: false, scheduled: 0 };
   if (scanning) return { enabled: true, busy: true, scheduled: 0 };

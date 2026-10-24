@@ -5,6 +5,7 @@ import ReminderOccurrence from '../models/ReminderOccurrence.js';
 import Rental from '../models/Rental.js';
 import User from '../models/User.js';
 import { deliverReminderEmail } from '../services/reminderEmailDeliveryService.js';
+import { cancelReminderTimers } from '../services/reminderProcessor.js';
 import { prepareManualWhatsapp, markManualWhatsappSent } from '../services/reminderWhatsappService.js';
 import { restoreDefaultRentalReturnReminders } from '../services/rentalReminderService.js';
 import AppError from '../utils/AppError.js';
@@ -69,8 +70,11 @@ const applySchedule = (definition, schedule) => {
   definition.recurrence = schedule.recurrence;
 };
 
-const cancelUnsentOccurrences = (definitionId, adminId, reason, now = new Date()) =>
-  ReminderOccurrence.updateMany(
+const cancelUnsentOccurrences = async (definitionId, adminId, reason, now = new Date()) => {
+  const occurrences = await ReminderOccurrence.find(
+    { definition: definitionId, status: { $in: MANAGEABLE_OCCURRENCE_STATUSES } }
+  ).select('_id').lean();
+  const result = await ReminderOccurrence.updateMany(
     { definition: definitionId, status: { $in: MANAGEABLE_OCCURRENCE_STATUSES } },
     {
       $set: {
@@ -83,6 +87,9 @@ const cancelUnsentOccurrences = (definitionId, adminId, reason, now = new Date()
       $unset: { lockedAt: 1, lockExpiresAt: 1, nextAttemptAt: 1 },
     }
   );
+  cancelReminderTimers(occurrences.map(({ _id }) => _id));
+  return result;
+};
 
 const loadContext = async (body) => {
   let rental = null;
@@ -309,6 +316,13 @@ const setReminderStatus = (status) => async (req, res, next) => {
       performedBy: req.user._id,
     });
     await definition.save();
+    if (status === 'paused') {
+      const occurrences = await ReminderOccurrence.find({
+        definition: definition._id,
+        status: { $in: MANAGEABLE_OCCURRENCE_STATUSES },
+      }).select('_id').lean();
+      cancelReminderTimers(occurrences.map(({ _id }) => _id));
+    }
     res.json(definition);
   } catch (error) {
     handleReminderError(error, next, `Failed to ${status === 'paused' ? 'pause' : 'resume'} reminder`);
@@ -390,6 +404,7 @@ export const cancelReminderOccurrence = async (req, res, next) => {
       { new: true }
     );
     if (!occurrence) throw new AppError('Only an unsent occurrence can be cancelled', 409);
+    cancelReminderTimers([occurrence._id]);
     res.json(occurrence);
   } catch (error) {
     handleReminderError(error, next, 'Failed to cancel reminder occurrence');
