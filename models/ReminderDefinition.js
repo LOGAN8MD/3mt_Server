@@ -50,6 +50,8 @@ const reminderDefinitionSchema = new mongoose.Schema(
       match: /^RMD-[A-Z0-9-]+$/,
     },
     type: { type: String, enum: REMINDER_TYPES, required: true },
+    plan: { type: mongoose.Schema.Types.ObjectId, ref: 'ReminderPlan' },
+    planRowKey: { type: String, trim: true, uppercase: true },
     rental: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'Rental',
@@ -153,6 +155,17 @@ reminderDefinitionSchema.pre('validate', function validateScheduleConfiguration(
 reminderDefinitionSchema.index({ rental: 1, status: 1, createdAt: -1 });
 reminderDefinitionSchema.index({ customer: 1, status: 1, createdAt: -1 });
 reminderDefinitionSchema.index({ type: 1, status: 1, createdAt: -1 });
+reminderDefinitionSchema.index(
+  { plan: 1, planRowKey: 1, scheduleVersion: 1 },
+  {
+    unique: true,
+    partialFilterExpression: {
+      plan: { $type: 'objectId' },
+      planRowKey: { $type: 'string' },
+    },
+    name: 'one_definition_per_plan_row_version',
+  }
+);
 
 const ReminderDefinition = mongoose.model('ReminderDefinition', reminderDefinitionSchema);
 export default ReminderDefinition;

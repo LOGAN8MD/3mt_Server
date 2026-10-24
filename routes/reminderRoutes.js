@@ -15,11 +15,21 @@ import {
   confirmOccurrenceWhatsapp,
   updateReminder,
 } from '../controllers/reminderController.js';
+import {
+  createReminderPlan,
+  getReminderPlanById,
+  getReminderPlans,
+  previewReminderPlan,
+  updateReminderPlan,
+} from '../controllers/reminderPlanController.js';
 import { isAdmin, protect } from '../middlewares/authMiddleware.js';
 
 const router = express.Router();
 router.use(protect, isAdmin);
 
+router.post('/plans/preview', previewReminderPlan);
+router.route('/plans').get(getReminderPlans).post(createReminderPlan);
+router.route('/plans/:id').get(getReminderPlanById).patch(updateReminderPlan);
 router.post('/preview', previewReminder);
 router.get('/occurrences', getReminderOccurrences);
 router.post('/occurrences/:id/cancel', cancelReminderOccurrence);

@@ -30,6 +30,8 @@ const reminderOccurrenceSchema = new mongoose.Schema(
       required: true,
     },
     definitionType: { type: String, enum: REMINDER_TYPES, required: true },
+    plan: { type: mongoose.Schema.Types.ObjectId, ref: 'ReminderPlan' },
+    planRowKey: { type: String, trim: true, uppercase: true },
     rental: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'Rental',
@@ -121,6 +123,7 @@ reminderOccurrenceSchema.index({ status: 1, nextAttemptAt: 1 });
 reminderOccurrenceSchema.index({ lockExpiresAt: 1 });
 reminderOccurrenceSchema.index({ rental: 1, status: 1, scheduledAt: 1 });
 reminderOccurrenceSchema.index({ customer: 1, scheduledAt: -1 });
+reminderOccurrenceSchema.index({ plan: 1, scheduleVersion: 1, scheduledAt: 1 });
 
 const ReminderOccurrence = mongoose.model('ReminderOccurrence', reminderOccurrenceSchema);
 export default ReminderOccurrence;

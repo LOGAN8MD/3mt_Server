@@ -86,6 +86,8 @@ Reminder occurrence upserts explicitly store each selected channel as `pending` 
 
 The multi-reminder plan foundation normalizes rental and standalone schedules before persistence. Rental plans support the existing default 12-hour/1-hour schedule or up to 20 custom positive offsets before return. Standalone plans use a selected start/end period and the same bounded offset rows. Every custom row owns its channels and bilingual content; the backend rejects missing contact details, duplicate timings, past sends, and sends outside the selected period. Existing single-reminder APIs remain compatible while complete plan persistence is added in the next task.
 
+Complete reminder plans are persisted as one versioned `ReminderPlan` plus one definition and occurrence per reminder row. Create and full-plan update operations use MongoDB transactions, reject repeated submission keys and identical active plans, and replace only unsent work. Delivered email and manually shared WhatsApp history remains attached to its original schedule version. Creating a rental plan also retires legacy active return reminders so the customer does not receive duplicate return messages.
+
 Default reminder definitions and occurrences contain rendered English and Hindi subjects and bodies. They show India-time rental dates, machine and rental identifiers, rental amount, amount paid, remaining balance, and security deposit as separate Indian-rupee values. The shared template utility also validates and combines future admin-authored bilingual messages for rental and standalone reminders.
 
 Automatic Brevo email and admin-confirmed manual WhatsApp delivery are connected. Occurrences remain durable MongoDB work items, while the protected processor reconstructs process-local timers after startup or cron wakeup.
@@ -95,6 +97,11 @@ Automatic Brevo email and admin-confirmed manual WhatsApp delivery are connected
 All reminder endpoints require an admin JWT. Dashboard date/time strings without `Z` or an explicit offset are interpreted as `Asia/Kolkata`; stored and returned date values are UTC instants.
 
 - `POST /api/reminders/preview` validates a schedule and returns its bilingual content and generated UTC dates without saving.
+- `POST /api/reminders/plans/preview` validates a complete rental or standalone multi-reminder plan without saving.
+- `POST /api/reminders/plans` atomically creates a complete plan; an optional `submissionKey` makes browser retries idempotent.
+- `GET /api/reminders/plans` lists plans with optional `planType`, `status`, `customer`, `rental`, `page`, and `limit` filters.
+- `GET /api/reminders/plans/:id` returns the plan and every immutable definition/occurrence version.
+- `PATCH /api/reminders/plans/:id` atomically replaces future work with a new schedule version while retaining delivery history.
 - `POST /api/reminders` creates a custom rental reminder when `rentalId` is supplied, otherwise a standalone customer reminder.
 - `GET /api/reminders` lists definitions with optional `type`, `status`, `customer`, `rental`, `page`, and `limit` filters.
 - `GET /api/reminders/:id` returns one definition with all immutable occurrence history.
