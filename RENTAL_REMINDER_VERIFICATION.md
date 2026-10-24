@@ -152,6 +152,15 @@ Record each live check separately with the plan/rental code, scheduled IST time,
 
 At implementation time, automated checks passed with 139 backend tests, 43 dashboard tests, backend syntax checks, and an optimized dashboard production build. The approved recipient is recorded above. Live delivery evidence must be added only after the new backend and dashboard commits are deployed and the admin creates the controlled test records.
 
+Deployment readiness recorded on 24 October 2026:
+
+- Backend commit `3b0de02` was pushed to `main`; Render returned HTTP 200 from `/api/health`.
+- Dashboard commit `cd5a6c8` was pushed to `main`; Netlify served the verified `main.d2de43ed.js` production bundle.
+- `GET /api/reminders/plans` without a JWT returned HTTP 401, confirming the deployed reminder API remains protected.
+- The customer website repository was not changed or deployed.
+
+Live message checks remain pending an authenticated admin session. In the deployed dashboard, use Deepak Mishra and create: (1) a rental confirmation, (2) a custom rental plan with practical near-future offsets, and (3) a standalone custom plan. For every case, record the plan/rental code and confirm actual inbox receipt, WhatsApp readiness/manual sharing, cancellation where applicable, and absence of duplicates. No admin password or JWT was requested, stored, or placed in source control.
+
 ## Failure Triage
 
 - `not_selected` on a selected channel: inspect occurrence creation/upsert initialization.
