@@ -11,6 +11,35 @@ export const MANAGEABLE_OCCURRENCE_STATUSES = Object.freeze([
   'failed',
 ]);
 
+const RENTAL_REMINDER_TYPES = Object.freeze([
+  'rental_activation_confirmation',
+  'rental_return',
+]);
+
+export const reminderOccurrenceScopeFilter = (value) => {
+  if (value === undefined || value === null || value === '') return null;
+  if (typeof value !== 'string') throw new AppError('scope must be rental or standalone', 400);
+
+  const scope = value.trim().toLowerCase();
+  if (scope === 'rental') {
+    return {
+      $or: [
+        { rental: { $type: 'objectId' } },
+        { definitionType: { $in: RENTAL_REMINDER_TYPES } },
+      ],
+    };
+  }
+  if (scope === 'standalone') {
+    return {
+      $and: [
+        { definitionType: 'standalone_custom' },
+        { $or: [{ rental: { $exists: false } }, { rental: null }] },
+      ],
+    };
+  }
+  throw new AppError('scope must be rental or standalone', 400);
+};
+
 const requireObjectId = (value, field) => {
   if (!mongoose.isValidObjectId(value)) throw new AppError(`${field} must be a valid id`, 400);
   return value.toString();

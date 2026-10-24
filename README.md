@@ -122,7 +122,7 @@ All reminder endpoints require an admin JWT. Dashboard date/time strings without
 - `PATCH /api/reminders/:id` versions and replaces an unsent active/paused schedule; definitions with delivery history cannot be edited.
 - `POST /api/reminders/:id/pause` and `POST /api/reminders/:id/resume` control a future series.
 - `POST /api/reminders/:id/cancel` cancels a series with a required reason while preserving history.
-- `GET /api/reminders/occurrences` lists occurrences with optional `status`, `definition`, `rental`, `page`, and `limit` filters.
+- `GET /api/reminders/occurrences` lists occurrences with optional `status`, `definition`, `rental`, `scope`, `page`, and `limit` filters. `scope=rental` includes rental activation and return reminders, including legacy rental-linked rows; `scope=standalone` includes only standalone custom reminders. Omitting `scope` preserves the combined history.
 - `POST /api/reminders/occurrences/:id/cancel` cancels one unsent occurrence with a required reason.
 - `POST /api/reminders/occurrences/:id/send-email` atomically sends or retries one eligible email channel through Brevo and returns the saved provider attempt result.
 - `POST /api/reminders/rentals/:rentalId/restore-defaults` replaces custom return reminders with the default 12-hour and 1-hour schedule.

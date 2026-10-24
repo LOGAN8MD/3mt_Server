@@ -13,6 +13,7 @@ import {
   MANAGEABLE_OCCURRENCE_STATUSES,
   parseReminderPagination,
   prepareReminderRequest,
+  reminderOccurrenceScopeFilter,
 } from '../utils/reminderManagement.js';
 
 const definitionPopulate = [
@@ -369,9 +370,13 @@ export const getReminderOccurrences = async (req, res, next) => {
       requireId(req.query.rental, 'rental');
       filter.rental = req.query.rental;
     }
+    const scopeFilter = reminderOccurrenceScopeFilter(req.query.scope);
+    if (scopeFilter) filter.$and = [scopeFilter];
     const [occurrences, total] = await Promise.all([
       ReminderOccurrence.find(filter)
         .populate('definition', 'status scheduleVersion')
+        .populate('rental', 'rentalCode status machineSnapshot customerSnapshot')
+        .populate('plan', 'planCode planType productContextSnapshot')
         .sort({ scheduledAt: 1 })
         .skip(pagination.skip)
         .limit(pagination.limit)
