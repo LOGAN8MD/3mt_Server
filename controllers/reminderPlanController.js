@@ -107,7 +107,9 @@ const handlePlanError = (error, next, context) => {
 
 const prepareFromRequest = async (body, existingPlan = null) => {
   const { rental, customer, product } = await loadPlanContext(body, existingPlan);
-  const prepared = prepareReminderPlan(body, { rental, customer });
+  const prepared = prepareReminderPlan(existingPlan
+    ? { ...body, startingMessage: existingPlan.startingMessage }
+    : body, { rental, customer });
   if (product) prepared.productId = product._id.toString();
   if (existingPlan && prepared.planType !== existingPlan.planType) {
     throw new AppError('A reminder plan cannot change between rental and standalone', 409);
@@ -205,6 +207,7 @@ export const createReminderPlan = async (req, res, next) => {
         startsAt: prepared.startsAt,
         endsAt: prepared.endsAt,
         rows: records.planRows,
+        ...(prepared.startingMessage ? { startingMessage: prepared.startingMessage } : {}),
         fingerprint,
         ...(submissionKey ? { submissionKey } : {}),
         createdBy: adminId,
@@ -330,6 +333,7 @@ export const updateReminderPlan = async (req, res, next) => {
     await mongoose.connection.transaction(async (session) => {
       const occurrences = await ReminderOccurrence.find({
         plan: existingPlan._id,
+        planRowKey: { $ne: 'STARTING_MESSAGE' },
         status: { $in: MANAGEABLE_OCCURRENCE_STATUSES },
       }).select('_id').session(session).lean();
       cancelledOccurrenceIds = occurrences.map(({ _id }) => _id);
@@ -338,7 +342,7 @@ export const updateReminderPlan = async (req, res, next) => {
         cancellationReason: 'Superseded by reminder plan update', updatedBy: adminId,
       };
       await ReminderDefinition.updateMany(
-        { plan: existingPlan._id, status: { $in: ['active', 'paused'] } },
+        { plan: existingPlan._id, planRowKey: { $ne: 'STARTING_MESSAGE' }, status: { $in: ['active', 'paused'] } },
         { $set: cancellation },
         { session }
       );

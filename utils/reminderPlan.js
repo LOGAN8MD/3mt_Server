@@ -126,6 +126,16 @@ export const prepareReminderPlan = (payload, {
   }
 
   const context = { planType, customer, startsAt, endsAt, now };
+  let startingMessage;
+  if (payload.startingMessage != null) {
+    if (planType !== 'standalone') throw new AppError('Starting messages are only supported for custom message plans', 400);
+    const channels = normalizeReminderChannels(payload.startingMessage.channels);
+    validateCustomerContacts(customer, channels);
+    startingMessage = {
+      channels,
+      content: prepareCustomContent(payload.startingMessage.content, 'starting message'),
+    };
+  }
   const reminders = reminderMode === 'default'
     ? prepareDefaultRentalRows(context)
     : prepareCustomRows({
@@ -142,5 +152,6 @@ export const prepareReminderPlan = (payload, {
     startsAt,
     endsAt,
     reminders,
+    ...(startingMessage ? { startingMessage } : {}),
   };
 };

@@ -78,6 +78,12 @@ const reminderPlanSchema = new mongoose.Schema(
     recipientSnapshot: { type: recipientSnapshotSchema, required: true },
     startsAt: { type: Date, required: true },
     endsAt: { type: Date, required: true },
+    startingMessage: {
+      type: new mongoose.Schema({
+        channels: { type: [{ type: String, enum: REMINDER_CHANNELS }], validate: validateChannels, required: true },
+        content: { type: bilingualContentSchema, required: true },
+      }, { _id: false }),
+    },
     rows: {
       type: [planRowSchema],
       validate: {

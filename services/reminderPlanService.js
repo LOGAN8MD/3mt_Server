@@ -28,6 +28,10 @@ export const reminderPlanFingerprint = (prepared) => createHash('sha256').update
   customerId: prepared.customerId,
   startsAt: prepared.startsAt.toISOString(),
   endsAt: prepared.endsAt.toISOString(),
+  ...(prepared.startingMessage ? { startingMessage: {
+    channels: [...prepared.startingMessage.channels].sort(),
+    content: canonicalContent(prepared.startingMessage.content),
+  } } : {}),
   reminders: prepared.reminders.map((row) => ({
     offsetMinutes: row.offsetMinutes,
     scheduledAt: row.scheduledAt.toISOString(),
@@ -123,5 +127,26 @@ export const buildReminderPlanRecords = ({
     };
   });
 
+  // Creation-only occurrence: independent of the future plan period and schedule revisions.
+  if (version === 1 && prepared.planType === 'standalone' && prepared.startingMessage) {
+    const { channels, content } = prepared.startingMessage;
+    const definitionId = new mongoose.Types.ObjectId();
+    const suffix = `${planId.toString()}-START`.toUpperCase();
+    definitions.push({
+      _id: definitionId, definitionCode: `RMD-PLAN-${suffix}`,
+      type: 'standalone_custom', plan: planId, planRowKey: 'STARTING_MESSAGE',
+      customer: customer._id, recipientSnapshot, status: 'active',
+      scheduleMode: 'exact', exactAt: now, channels, contentMode: 'custom', content,
+      scheduleVersion: 1, createdBy: adminId, updatedBy: adminId,
+    });
+    occurrences.push({
+      occurrenceKey: `ROC-PLAN-${suffix}`, definition: definitionId,
+      definitionType: 'standalone_custom', plan: planId, planRowKey: 'STARTING_MESSAGE',
+      customer: customer._id, recipientSnapshot, scheduledAt: now,
+      status: 'pending', scheduleVersion: 1, channels, contentSnapshot: content,
+      emailDelivery: deliveryState(channels, 'email'),
+      whatsappDelivery: deliveryState(channels, 'whatsapp'),
+    });
+  }
   return { planCode, recipientSnapshot, planRows, definitions, occurrences };
 };

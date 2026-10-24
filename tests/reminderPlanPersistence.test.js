@@ -2,6 +2,8 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import mongoose from 'mongoose';
 import ReminderPlan from '../models/ReminderPlan.js';
+import ReminderDefinition from '../models/ReminderDefinition.js';
+import ReminderOccurrence from '../models/ReminderOccurrence.js';
 import {
   buildReminderPlanRecords,
   normalizeSubmissionKey,
@@ -47,6 +49,40 @@ const content = (label = 'Return') => ({
   subjectHindi: `${label} रिमाइंडर`,
   bodyEnglish: `${label} English body`,
   bodyHindi: `${label} हिन्दी संदेश`,
+});
+
+test('optional starting message is due on creation, fingerprinted and never rebuilt on edits', async () => {
+  const payload = {
+    startAt: '2026-11-16T09:00', endAt: '2026-11-16T18:00',
+    reminders: [{ offsetMinutes: 60, channels: ['email'], content: content('Later') }],
+  };
+  const without = prepareReminderPlan(payload, { customer, now });
+  const prepared = prepareReminderPlan({ ...payload, startingMessage: { channels: ['email', 'whatsapp'], content: content('Welcome') } }, { customer, now });
+  const args = { planId: ids.plan, planCode: 'RPL-START-1', prepared, customer, adminId: ids.admin, now };
+  const records = buildReminderPlanRecords({ ...args, version: 1 });
+  assert.equal(records.planRows.length, 1);
+  assert.equal(records.occurrences.length, 2);
+  const initial = records.occurrences.find((row) => row.planRowKey === 'STARTING_MESSAGE');
+  assert.equal(initial.scheduledAt.getTime(), now.getTime());
+  assert.ok(initial.scheduledAt < prepared.startsAt);
+  assert.equal(initial.emailDelivery.status, 'pending');
+  assert.equal(initial.whatsappDelivery.status, 'pending');
+  assert.match(initial.contentSnapshot.bodyEnglish, /Welcome/);
+  await new ReminderDefinition(records.definitions.find((row) => row.planRowKey === 'STARTING_MESSAGE')).validate();
+  await new ReminderOccurrence(initial).validate();
+  await new ReminderPlan({
+    planCode: 'RPL-START-1', planType: 'standalone', reminderMode: 'custom',
+    customer: customer._id, recipientSnapshot: records.recipientSnapshot,
+    startsAt: prepared.startsAt, endsAt: prepared.endsAt, rows: records.planRows,
+    startingMessage: prepared.startingMessage, fingerprint: reminderPlanFingerprint(prepared), createdBy: ids.admin,
+  }).validate();
+  assert.equal(buildReminderPlanRecords({ ...args, version: 2 }).occurrences.length, 1);
+  assert.equal(buildReminderPlanRecords({ ...args, prepared: without, version: 1 }).occurrences.length, 1);
+  assert.notEqual(reminderPlanFingerprint(prepared), reminderPlanFingerprint(without));
+  const later = prepareReminderPlan({ ...payload, startingMessage: prepared.startingMessage }, { customer, now: new Date(now.getTime() + 1000) });
+  assert.equal(reminderPlanFingerprint(later), reminderPlanFingerprint(prepared));
+  assert.throws(() => prepareReminderPlan({ ...payload, startingMessage: { channels: ['email'], content: { bodyEnglish: 'Only English' } } }, { customer, now }), /Hindi/);
+  assert.throws(() => prepareReminderPlan({ ...payload, startingMessage: { channels: ['email'], content: content() } }, { customer: { ...customer, email: '' }, now }), /email address/);
 });
 
 test('fingerprints are deterministic and change with plan content', () => {
