@@ -50,6 +50,15 @@ const planRowSchema = new mongoose.Schema(
   { _id: false }
 );
 
+const productContextSnapshotSchema = new mongoose.Schema(
+  {
+    name: { type: String, required: true, trim: true },
+    brand: { type: String, trim: true, default: '' },
+    model: { type: String, trim: true, default: '' },
+  },
+  { _id: false }
+);
+
 const reminderPlanSchema = new mongoose.Schema(
   {
     planCode: {
@@ -63,6 +72,8 @@ const reminderPlanSchema = new mongoose.Schema(
     planType: { type: String, enum: ['rental', 'standalone'], required: true },
     reminderMode: { type: String, enum: ['default', 'custom'], required: true },
     rental: { type: mongoose.Schema.Types.ObjectId, ref: 'Rental' },
+    product: { type: mongoose.Schema.Types.ObjectId, ref: 'Product' },
+    productContextSnapshot: { type: productContextSnapshotSchema },
     customer: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
     recipientSnapshot: { type: recipientSnapshotSchema, required: true },
     startsAt: { type: Date, required: true },
@@ -110,6 +121,12 @@ reminderPlanSchema.pre('validate', function validatePlan() {
   }
   if (this.planType === 'standalone' && this.rental) {
     this.invalidate('rental', 'standalone reminder plans cannot reference a rental');
+  }
+  if (this.planType === 'rental' && this.product) {
+    this.invalidate('product', 'rental reminder plans use the rental machine context');
+  }
+  if (this.product && !this.productContextSnapshot?.name) {
+    this.invalidate('productContextSnapshot', 'product context snapshot is required');
   }
   if (this.planType === 'standalone' && this.reminderMode !== 'custom') {
     this.invalidate('reminderMode', 'standalone reminder plans must be custom');

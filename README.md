@@ -88,6 +88,8 @@ The multi-reminder plan foundation normalizes rental and standalone schedules be
 
 Complete reminder plans are persisted as one versioned `ReminderPlan` plus one definition and occurrence per reminder row. Create and full-plan update operations use MongoDB transactions, reject repeated submission keys and identical active plans, and replace only unsent work. Delivered email and manually shared WhatsApp history remains attached to its original schedule version. Creating a rental plan also retires legacy active return reminders so the customer does not receive duplicate return messages.
 
+Standalone plans may include an optional validated `productId`. The plan stores both the Product reference and a name/brand/model snapshot for stable historical context. This association is descriptive: reminder creation and editing never reserve the product, modify stock, or change availability.
+
 Rental create and draft-update requests now accept `reminderSettings`. Use `{ "mode": "default", "reminders": [] }` for the 12-hour and 1-hour return schedule, or `mode: "custom"` with up to 20 rows containing `offsetMinutes`, `channels`, and bilingual `content`. Drafts retain these settings without creating occurrences. Active creation and draft activation revalidate the settings, atomically create the complete return plan and one idempotent rental-confirmation occurrence, and then start email processing. Deadline extension versions the selected offsets/content and excludes channels already delivered. Rental return/cancellation transactionally cancels the parent plan and remaining unsent work while preserving delivery history.
 
 Default reminder definitions and occurrences contain rendered English and Hindi subjects and bodies. They show India-time rental dates, machine and rental identifiers, rental amount, amount paid, remaining balance, and security deposit as separate Indian-rupee values. The shared template utility also validates and combines future admin-authored bilingual messages for rental and standalone reminders.
@@ -95,6 +97,16 @@ Default reminder definitions and occurrences contain rendered English and Hindi 
 Automatic Brevo email and admin-confirmed manual WhatsApp delivery are connected. Occurrences remain durable MongoDB work items, while the protected processor reconstructs process-local timers after startup or cron wakeup.
 
 ### Admin Reminder APIs
+
+Complete plan lifecycle endpoints are admin-only:
+
+- `GET /api/reminders/plans` lists plans with pagination plus optional `search`, `planType`, `status`, `customer`, and `rental` filters.
+- `GET /api/reminders/plans/:id` returns the plan with all definition and occurrence versions.
+- `PATCH /api/reminders/plans/:id` replaces future unsent rows while preserving delivery history and successful channels.
+- `POST /api/reminders/plans/:id/pause` pauses the plan and its active definitions after the durable transaction, then clears known local timers.
+- `POST /api/reminders/plans/:id/resume` resumes paused definitions and triggers an eligibility scan.
+- `POST /api/reminders/plans/:id/cancel` requires a reason and transactionally cancels the plan, active definitions, and unsent occurrences.
+- `POST /api/reminders/occurrences/:id/cancel` requires a reason and cancels one unsent occurrence only.
 
 All reminder endpoints require an admin JWT. Dashboard date/time strings without `Z` or an explicit offset are interpreted as `Asia/Kolkata`; stored and returned date values are UTC instants.
 
@@ -191,5 +203,7 @@ Configure the external cron service to POST `/api/reminder-jobs/process` every f
 While awake, the backend scans every 30 seconds and sets timers for due emails within ten minutes. Rental activation requests also trigger a scan. Timers are deduplicated locally, email delivery is atomically claimed across instances, and sends are limited to three concurrent calls per process. Paused/cancelled/old-version reminders and inactive rentals are rechecked before delivery. Automatic emails more than ten minutes late are skipped; manual WhatsApp remains independent. Shutdown clears timers, and startup reconstructs pending timers. Interrupted/ambiguous provider requests become `uncertain` and are not automatically retried; inspect Brevo before taking further action. Do not treat the custom email idempotency header as a guarantee of provider-side deduplication.
 
 Reminder edits, pauses, occurrence/series cancellations, rental deadline replacement, rental cancellation, and recorded return now remove their known process-local timer handles immediately after the durable MongoDB state change. The periodic scan and final delivery eligibility check remain in place for cross-instance work and race protection; an email already accepted by Brevo cannot be recalled.
+
+The automated reminder verification suite covers default/custom rental plans, standalone plans with optional product context, draft activation, deadline replacement, pause/resume, cancellation/return cleanup, transaction failure handling, unique submission keys, simultaneous delivery claims, channel independence, partial-delivery preservation, timer reconstruction primitives, IST conversion, schedule limits, missing contacts, and admin authorization guards. These tests use model/service mocks and schema validation; they do not write disposable records to production MongoDB.
 
 Dashboard message preview may show the original occurrence snapshot. Default rental messages are refreshed with current dates and balances when preparing a WhatsApp link or sending email. No database migration is required for existing occurrences; new optional manual audit fields are added as needed.

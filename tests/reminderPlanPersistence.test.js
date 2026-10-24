@@ -14,6 +14,7 @@ const ids = {
   customer: new mongoose.Types.ObjectId(),
   rental: new mongoose.Types.ObjectId(),
   plan: new mongoose.Types.ObjectId(),
+  product: new mongoose.Types.ObjectId(),
 };
 const now = new Date('2026-11-15T04:30:00.000Z');
 const customer = {
@@ -66,6 +67,19 @@ test('fingerprints are deterministic and change with plan content', () => {
   assert.notEqual(reminderPlanFingerprint(prepared), reminderPlanFingerprint(changed));
   assert.equal(normalizeSubmissionKey('  browser-request-1  '), 'browser-request-1');
   assert.equal(normalizeSubmissionKey('   '), undefined);
+});
+
+test('standalone fingerprint includes optional product context', () => {
+  const base = prepareReminderPlan({
+    customerId: ids.customer.toString(),
+    startAt: '2026-11-16T09:00',
+    endAt: '2026-11-16T18:00',
+    reminders: [{ offsetMinutes: 60, channels: ['email'], content: content('Service') }],
+  }, { customer, now });
+  const withoutProduct = reminderPlanFingerprint(base);
+  const withProduct = reminderPlanFingerprint({ ...base, productId: ids.product.toString() });
+
+  assert.notEqual(withProduct, withoutProduct);
 });
 
 test('record builder links every plan row to one definition and occurrence', () => {
@@ -157,6 +171,23 @@ test('standalone plan records use exact scheduling and reject malformed persiste
   assert.equal(records.definitions[0].type, 'standalone_custom');
   assert.equal(records.definitions[0].scheduleMode, 'exact');
   assert.equal(records.definitions[0].rental, undefined);
+
+  const contextualPlan = new ReminderPlan({
+    planCode: 'RPL-CONTEXT-1',
+    planType: 'standalone',
+    reminderMode: 'custom',
+    product: ids.product,
+    productContextSnapshot: { name: 'Bosch Drill', brand: 'BOSCH', model: 'D1' },
+    customer: ids.customer,
+    recipientSnapshot: records.recipientSnapshot,
+    startsAt: prepared.startsAt,
+    endsAt: prepared.endsAt,
+    rows: records.planRows,
+    fingerprint: reminderPlanFingerprint({ ...prepared, productId: ids.product.toString() }),
+    createdBy: ids.admin,
+  });
+  await contextualPlan.validate();
+  assert.equal(contextualPlan.productContextSnapshot.name, 'Bosch Drill');
 
   const invalid = new ReminderPlan({
     planCode: 'RPL-INVALID-1',

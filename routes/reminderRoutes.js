@@ -16,10 +16,13 @@ import {
   updateReminder,
 } from '../controllers/reminderController.js';
 import {
+  cancelReminderPlan,
   createReminderPlan,
   getReminderPlanById,
   getReminderPlans,
+  pauseReminderPlan,
   previewReminderPlan,
+  resumeReminderPlan,
   updateReminderPlan,
 } from '../controllers/reminderPlanController.js';
 import { isAdmin, protect } from '../middlewares/authMiddleware.js';
@@ -30,6 +33,9 @@ router.use(protect, isAdmin);
 router.post('/plans/preview', previewReminderPlan);
 router.route('/plans').get(getReminderPlans).post(createReminderPlan);
 router.route('/plans/:id').get(getReminderPlanById).patch(updateReminderPlan);
+router.post('/plans/:id/pause', pauseReminderPlan);
+router.post('/plans/:id/resume', resumeReminderPlan);
+router.post('/plans/:id/cancel', cancelReminderPlan);
 router.post('/preview', previewReminder);
 router.get('/occurrences', getReminderOccurrences);
 router.post('/occurrences/:id/cancel', cancelReminderOccurrence);

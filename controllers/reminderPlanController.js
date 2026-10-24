@@ -3,6 +3,7 @@ import mongoose from 'mongoose';
 import ReminderPlan from '../models/ReminderPlan.js';
 import ReminderDefinition from '../models/ReminderDefinition.js';
 import ReminderOccurrence from '../models/ReminderOccurrence.js';
+import Product from '../models/Product.js';
 import Rental from '../models/Rental.js';
 import User from '../models/User.js';
 import { cancelReminderTimers, processReminderEmails } from '../services/reminderProcessor.js';
@@ -18,9 +19,16 @@ import { prepareReminderPlan } from '../utils/reminderPlan.js';
 const planPopulate = [
   { path: 'customer', select: 'name firstName lastName email phone role' },
   { path: 'rental', select: 'rentalCode status handoverAt expectedReturnAt machineSnapshot customerSnapshot' },
+  { path: 'product', select: 'name brand model condition availabilityType availabilityStatus' },
   { path: 'createdBy', select: 'name email role' },
   { path: 'updatedBy', select: 'name email role' },
 ];
+const PLAN_STATUSES = new Set(['active', 'paused', 'completed', 'cancelled']);
+const PLAN_TYPES = new Set(['rental', 'standalone']);
+const SUCCESSFUL_EMAIL_STATUSES = new Set(['accepted', 'delivered']);
+const SUCCESSFUL_WHATSAPP_STATUSES = new Set(['manual_sent', 'accepted', 'delivered']);
+
+const escapeRegex = (value) => String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 const requireId = (value, label) => {
   if (!mongoose.isValidObjectId(value)) throw new AppError(`Invalid ${label} id`, 400);
@@ -47,7 +55,40 @@ const loadPlanContext = async (body, existingPlan = null) => {
   requireId(customerId, 'customer');
   const customer = await User.findById(customerId);
   validateCustomer(customer);
-  return { rental, customer };
+  const productId = body.productId === '' ? null : body.productId ?? existingPlan?.product;
+  let product = null;
+  if (productId) {
+    if (rental) throw new AppError('Rental reminder plans use the rental machine context', 400);
+    requireId(productId, 'product');
+    product = await Product.findById(productId);
+    if (!product) throw new AppError('Product context not found', 404);
+  }
+  return { rental, customer, product };
+};
+
+const productContextSnapshot = (product) => product ? ({
+  name: String(product.name || '').trim(),
+  brand: String(product.brand || '').trim(),
+  model: String(product.model || '').trim(),
+}) : undefined;
+
+export const deliveredChannelsFromOccurrences = (occurrences) => {
+  const delivered = new Map();
+  for (const occurrence of occurrences) {
+    if (!occurrence.planRowKey) continue;
+    const channels = delivered.get(occurrence.planRowKey) || new Set();
+    if (SUCCESSFUL_EMAIL_STATUSES.has(occurrence.emailDelivery?.status)) channels.add('email');
+    if (SUCCESSFUL_WHATSAPP_STATUSES.has(occurrence.whatsappDelivery?.status)) channels.add('whatsapp');
+    delivered.set(occurrence.planRowKey, channels);
+  }
+  return new Map([...delivered].map(([key, channels]) => [key, [...channels]]));
+};
+
+const deliveredChannelsByRow = async (planId) => {
+  const occurrences = await ReminderOccurrence.find({ plan: planId })
+    .select('planRowKey emailDelivery.status whatsappDelivery.status')
+    .lean();
+  return deliveredChannelsFromOccurrences(occurrences);
 };
 
 const generatePlanCode = () =>
@@ -65,8 +106,9 @@ const handlePlanError = (error, next, context) => {
 };
 
 const prepareFromRequest = async (body, existingPlan = null) => {
-  const { rental, customer } = await loadPlanContext(body, existingPlan);
+  const { rental, customer, product } = await loadPlanContext(body, existingPlan);
   const prepared = prepareReminderPlan(body, { rental, customer });
+  if (product) prepared.productId = product._id.toString();
   if (existingPlan && prepared.planType !== existingPlan.planType) {
     throw new AppError('A reminder plan cannot change between rental and standalone', 409);
   }
@@ -79,7 +121,7 @@ const prepareFromRequest = async (body, existingPlan = null) => {
   if (existingPlan && prepared.customerId !== existingPlan.customer.toString()) {
     throw new AppError('A reminder plan cannot be moved to another customer', 409);
   }
-  return { rental, customer, prepared };
+  return { rental, customer, product, prepared };
 };
 
 export const previewReminderPlan = async (req, res, next) => {
@@ -93,7 +135,7 @@ export const previewReminderPlan = async (req, res, next) => {
 
 export const createReminderPlan = async (req, res, next) => {
   try {
-    const { rental, customer, prepared } = await prepareFromRequest(req.body);
+    const { rental, customer, product, prepared } = await prepareFromRequest(req.body);
     const adminId = req.user._id;
     const now = new Date();
     const planId = new mongoose.Types.ObjectId();
@@ -154,6 +196,10 @@ export const createReminderPlan = async (req, res, next) => {
         planType: prepared.planType,
         reminderMode: prepared.reminderMode,
         ...(rental ? { rental: rental._id } : {}),
+        ...(product ? {
+          product: product._id,
+          productContextSnapshot: productContextSnapshot(product),
+        } : {}),
         customer: customer._id,
         recipientSnapshot: records.recipientSnapshot,
         startsAt: prepared.startsAt,
@@ -181,8 +227,14 @@ export const getReminderPlans = async (req, res, next) => {
   try {
     const pagination = parseReminderPagination(req.query);
     const filter = {};
-    if (req.query.planType) filter.planType = req.query.planType;
-    if (req.query.status) filter.status = req.query.status;
+    if (req.query.planType) {
+      if (!PLAN_TYPES.has(req.query.planType)) throw new AppError('Invalid reminder plan type', 400);
+      filter.planType = req.query.planType;
+    }
+    if (req.query.status) {
+      if (!PLAN_STATUSES.has(req.query.status)) throw new AppError('Invalid reminder plan status', 400);
+      filter.status = req.query.status;
+    }
     if (req.query.customer) {
       requireId(req.query.customer, 'customer');
       filter.customer = req.query.customer;
@@ -190,6 +242,19 @@ export const getReminderPlans = async (req, res, next) => {
     if (req.query.rental) {
       requireId(req.query.rental, 'rental');
       filter.rental = req.query.rental;
+    }
+    const search = String(req.query.search || '').trim();
+    if (search) {
+      const pattern = new RegExp(escapeRegex(search), 'i');
+      filter.$or = [
+        { planCode: pattern },
+        { 'recipientSnapshot.name': pattern },
+        { 'recipientSnapshot.email': pattern },
+        { 'recipientSnapshot.phone': pattern },
+        { 'productContextSnapshot.name': pattern },
+        { 'productContextSnapshot.brand': pattern },
+        { 'productContextSnapshot.model': pattern },
+      ];
     }
     const [plans, total] = await Promise.all([
       ReminderPlan.find(filter).populate(planPopulate).sort({ updatedAt: -1 })
@@ -233,7 +298,7 @@ export const updateReminderPlan = async (req, res, next) => {
     if (!['active', 'paused'].includes(existingPlan.status)) {
       throw new AppError('Only active or paused reminder plans can be updated', 409);
     }
-    const { rental, customer, prepared } = await prepareFromRequest(req.body, existingPlan);
+    const { rental, customer, product, prepared } = await prepareFromRequest(req.body, existingPlan);
     const adminId = req.user._id;
     const now = new Date();
     const nextVersion = existingPlan.version + 1;
@@ -246,6 +311,7 @@ export const updateReminderPlan = async (req, res, next) => {
     })) {
       throw new AppError('An identical active reminder plan already exists', 409);
     }
+    const excludedChannelsByRowKey = await deliveredChannelsByRow(existingPlan._id);
     const records = buildReminderPlanRecords({
       planId: existingPlan._id,
       planCode: existingPlan.planCode,
@@ -255,7 +321,11 @@ export const updateReminderPlan = async (req, res, next) => {
       customer,
       adminId,
       now,
+      excludedChannelsByRowKey,
     });
+    if (existingPlan.status === 'paused') {
+      records.definitions.forEach((definition) => { definition.status = 'paused'; });
+    }
     let cancelledOccurrenceIds = [];
     await mongoose.connection.transaction(async (session) => {
       const occurrences = await ReminderOccurrence.find({
@@ -279,6 +349,8 @@ export const updateReminderPlan = async (req, res, next) => {
       );
       existingPlan.reminderMode = prepared.reminderMode;
       existingPlan.recipientSnapshot = records.recipientSnapshot;
+      existingPlan.product = product?._id;
+      existingPlan.productContextSnapshot = productContextSnapshot(product);
       existingPlan.startsAt = prepared.startsAt;
       existingPlan.endsAt = prepared.endsAt;
       existingPlan.rows = records.planRows;
@@ -293,13 +365,111 @@ export const updateReminderPlan = async (req, res, next) => {
         performedAt: now,
       });
       await existingPlan.save({ session });
-      await ReminderDefinition.insertMany(records.definitions, { session });
-      await ReminderOccurrence.insertMany(records.occurrences, { session });
+      if (records.definitions.length) await ReminderDefinition.insertMany(records.definitions, { session });
+      if (records.occurrences.length) await ReminderOccurrence.insertMany(records.occurrences, { session });
     });
     cancelReminderTimers(cancelledOccurrenceIds);
     void processReminderEmails().catch((error) => console.error('Reminder plan scan failed:', error.message));
     res.json(await ReminderPlan.findById(existingPlan._id).populate(planPopulate).lean());
   } catch (error) {
     handlePlanError(error, next, 'Failed to update reminder plan');
+  }
+};
+
+const setReminderPlanStatus = (nextStatus) => async (req, res, next) => {
+  try {
+    requireId(req.params.id, 'reminder plan');
+    const currentStatus = nextStatus === 'paused' ? 'active' : 'paused';
+    const plan = await ReminderPlan.findOne({ _id: req.params.id, status: currentStatus });
+    if (!plan) {
+      throw new AppError(`Only ${currentStatus} reminder plans can be ${nextStatus === 'paused' ? 'paused' : 'resumed'}`, 409);
+    }
+    const adminId = req.user._id;
+    const now = new Date();
+    const occurrences = await ReminderOccurrence.find({
+      plan: plan._id,
+      status: { $in: MANAGEABLE_OCCURRENCE_STATUSES },
+    }).select('_id').lean();
+
+    await mongoose.connection.transaction(async (session) => {
+      plan.status = nextStatus;
+      plan.updatedBy = adminId;
+      plan.auditHistory.push({
+        action: nextStatus === 'paused' ? 'reminder_plan_paused' : 'reminder_plan_resumed',
+        performedBy: adminId,
+        performedAt: now,
+      });
+      await plan.save({ session });
+      await ReminderDefinition.updateMany(
+        { plan: plan._id, status: currentStatus },
+        { $set: { status: nextStatus, updatedBy: adminId } },
+        { session }
+      );
+    });
+
+    if (nextStatus === 'paused') cancelReminderTimers(occurrences.map(({ _id }) => _id));
+    else void processReminderEmails().catch((error) => console.error('Reminder plan resume scan failed:', error.message));
+    res.json(await ReminderPlan.findById(plan._id).populate(planPopulate).lean());
+  } catch (error) {
+    handlePlanError(error, next, `Failed to ${nextStatus === 'paused' ? 'pause' : 'resume'} reminder plan`);
+  }
+};
+
+export const pauseReminderPlan = setReminderPlanStatus('paused');
+export const resumeReminderPlan = setReminderPlanStatus('active');
+
+export const cancelReminderPlan = async (req, res, next) => {
+  try {
+    requireId(req.params.id, 'reminder plan');
+    const reason = String(req.body.reason || '').trim();
+    if (!reason) throw new AppError('Cancellation reason is required', 400);
+    const plan = await ReminderPlan.findOne({
+      _id: req.params.id,
+      status: { $in: ['active', 'paused'] },
+    });
+    if (!plan) throw new AppError('Only active or paused reminder plans can be cancelled', 409);
+
+    const adminId = req.user._id;
+    const now = new Date();
+    let occurrenceIds = [];
+    await mongoose.connection.transaction(async (session) => {
+      const occurrences = await ReminderOccurrence.find({
+        plan: plan._id,
+        status: { $in: MANAGEABLE_OCCURRENCE_STATUSES },
+      }).select('_id').session(session).lean();
+      occurrenceIds = occurrences.map(({ _id }) => _id);
+      const cancellation = {
+        status: 'cancelled',
+        cancelledAt: now,
+        cancelledBy: adminId,
+        cancellationReason: reason,
+        updatedBy: adminId,
+      };
+      plan.status = 'cancelled';
+      plan.cancelledAt = now;
+      plan.cancelledBy = adminId;
+      plan.cancellationReason = reason;
+      plan.updatedBy = adminId;
+      plan.auditHistory.push({
+        action: 'reminder_plan_cancelled', note: reason, performedBy: adminId, performedAt: now,
+      });
+      await plan.save({ session });
+      await ReminderDefinition.updateMany(
+        { plan: plan._id, status: { $in: ['active', 'paused'] } },
+        { $set: cancellation },
+        { session }
+      );
+      if (occurrenceIds.length) {
+        await ReminderOccurrence.updateMany(
+          { _id: { $in: occurrenceIds } },
+          { $set: { ...cancellation, lockToken: '' }, $unset: { lockedAt: 1, lockExpiresAt: 1, nextAttemptAt: 1 } },
+          { session }
+        );
+      }
+    });
+    cancelReminderTimers(occurrenceIds);
+    res.json(await ReminderPlan.findById(plan._id).populate(planPopulate).lean());
+  } catch (error) {
+    handlePlanError(error, next, 'Failed to cancel reminder plan');
   }
 };

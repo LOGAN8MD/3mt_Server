@@ -1,6 +1,8 @@
 # Rental Reminder Release Verification
 
-This checklist verifies the dashboard and backend rental-reminder workflow without involving the customer website. Use a dedicated test customer and machine for manual production checks.
+This checklist verifies the dashboard and backend reminder-plan workflow without involving the customer website. Use a dedicated test customer and machine for manual production checks.
+
+Approved Task 28 test recipient: Deepak Mishra, `deepak.mishra2327@gmail.com`, WhatsApp ending `4286`. Do not place provider credentials, JWTs, the complete phone number, or the cron secret in source control or screenshots.
 
 ## Automated Verification
 
@@ -36,6 +38,30 @@ Confirm cron-job.org sends `POST https://threemt-server.onrender.com/api/reminde
 
 Brevo IP security must authorize every outbound IP range shown under the Render service's Connect > Outbound view. Render may use any address in those listed ranges.
 
+## Deployment Order and Compatibility
+
+1. Run backend and dashboard verification locally.
+2. Deploy the backend first. Wait for `GET /api/health` to return HTTP 200 before publishing the dashboard.
+3. Confirm the deployed backend exposes the admin-only reminder plan routes before enabling the new dashboard UI.
+4. Deploy the dashboard and sign in with a dedicated admin account.
+5. Keep the customer website unchanged; the reminder-plan release does not require a website deployment.
+
+No destructive data migration is required. Existing reminder definitions and occurrences remain readable, while new complete plans add `ReminderPlan` records and optional references. Before live creation, confirm MongoDB has these indexes from the current schemas:
+
+- `reminderplans`: unique `planCode`; unique partial `{ createdBy, submissionKey }`; rental/customer/type status indexes.
+- `reminderdefinitions`: unique definition key and lifecycle lookup indexes.
+- `reminderoccurrences`: unique occurrence key and `{ plan, scheduleVersion, scheduledAt }` lookup index.
+
+If index creation reports existing duplicates, stop deployment and inspect the conflicting records. Do not delete production reminder history merely to force an index.
+
+## Rollback
+
+1. Disable or pause the cron job before rolling back reminder-processing code.
+2. Redeploy the previously known-good dashboard and backend commits, backend first.
+3. Do not delete newly created plans, definitions, occurrences, or delivery-attempt history. Older code can ignore additive optional fields.
+4. If email automation itself is unsafe, set `REMINDER_EMAIL_AUTOMATION_ENABLED=false` in Render and redeploy/restart the backend.
+5. Re-enable cron only after the health endpoint and reminder eligibility behavior are verified.
+
 ## Manual End-to-End Checklist
 
 ### Activation and channels
@@ -52,6 +78,27 @@ Brevo IP security must authorize every outbound IP range shown under the Render 
 2. Confirm cron wakes Render and email is delivered within the allowed window.
 3. Confirm email acceptance does not mark WhatsApp sent.
 4. Share WhatsApp manually and confirm the independent audit timestamp.
+
+### Custom rental plan
+
+1. Create a test rental using Custom reminders with at least two distinct future offsets.
+2. Preview and confirm that every calculated time is shown in IST and remains before the return deadline.
+3. Confirm each selected email channel is accepted/received once and each WhatsApp channel remains `Message ready` until manually shared and confirmed.
+4. Edit one future unsent row, then verify the prior row is retained as cancelled history and the replacement uses the next schedule version.
+
+### Standalone reminder plan
+
+1. Open Create Reminder > Custom Message and select the approved test customer.
+2. Create at least two practical near-future reminders, optionally attaching a product only as descriptive context.
+3. Confirm the product remains unchanged and no inventory status is reserved.
+4. Confirm email and manual WhatsApp outcomes independently and verify no duplicate send occurs after another cron call.
+
+### Plan lifecycle
+
+1. Pause one future plan and confirm its due work does not send.
+2. Resume it and confirm eligible work is reconstructed after a cron/backend scan.
+3. Cancel one future occurrence with a reason and confirm it never sends.
+4. Cancel a separate plan with a reason and confirm sent history remains visible while future unsent work is cancelled.
 
 ### Extension replacement
 
@@ -98,6 +145,12 @@ As of 24 October 2026:
 - Final automated verification passed 117 backend tests, 26 dashboard tests, backend syntax checks, and the optimized dashboard production build.
 
 Cancellation/return and extension replacement are covered by automated lifecycle and cleanup tests. Repeat their manual production smoke tests after changes to rental lifecycle, reminder scheduling, cron configuration, or provider configuration.
+
+## Task 28 Evidence Log
+
+Record each live check separately with the plan/rental code, scheduled IST time, email provider result, actual inbox receipt, WhatsApp preparation/manual confirmation result, cancellation outcome, and duplicate-attempt count. An HTTP 200 cron response proves only that processing ran; it does not prove provider acceptance or customer receipt.
+
+At implementation time, automated checks passed with 139 backend tests, 43 dashboard tests, backend syntax checks, and an optimized dashboard production build. The approved recipient is recorded above. Live delivery evidence must be added only after the new backend and dashboard commits are deployed and the admin creates the controlled test records.
 
 ## Failure Triage
 

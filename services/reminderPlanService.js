@@ -24,6 +24,7 @@ export const reminderPlanFingerprint = (prepared) => createHash('sha256').update
   planType: prepared.planType,
   reminderMode: prepared.reminderMode,
   rentalId: prepared.rentalId || '',
+  productId: prepared.productId || '',
   customerId: prepared.customerId,
   startsAt: prepared.startsAt.toISOString(),
   endsAt: prepared.endsAt.toISOString(),
