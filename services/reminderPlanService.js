@@ -49,6 +49,7 @@ export const buildReminderPlanRecords = ({
   customer,
   adminId,
   now = new Date(),
+  excludedChannelsByRowKey = new Map(),
 }) => {
   const recipientSnapshot = planRecipientSnapshot(customer);
   const defaultContentByOffset = new Map(
@@ -64,6 +65,8 @@ export const buildReminderPlanRecords = ({
     const content = row.contentMode === 'default_template'
       ? defaultContentByOffset.get(row.offsetMinutes)
       : row.content;
+    const excludedChannels = new Set(excludedChannelsByRowKey.get(row.rowKey) || []);
+    const pendingChannels = row.channels.filter((channel) => !excludedChannels.has(channel));
     const definitionId = new mongoose.Types.ObjectId();
     const suffix = `${planId.toString()}-${index + 1}-V${version}`.toUpperCase();
     const definition = {
@@ -80,15 +83,15 @@ export const buildReminderPlanRecords = ({
       ...(row.scheduleMode === 'offset_before_return'
         ? { offsetMinutes: row.offsetMinutes }
         : { exactAt: row.scheduledAt }),
-      channels: row.channels,
+      channels: pendingChannels,
       contentMode: row.contentMode,
       content,
       scheduleVersion: version,
       createdBy: adminId,
       updatedBy: adminId,
     };
-    definitions.push(definition);
-    occurrences.push({
+    if (pendingChannels.length > 0) definitions.push(definition);
+    if (pendingChannels.length > 0) occurrences.push({
       occurrenceKey: `ROC-PLAN-${suffix}`,
       definition: definitionId,
       definitionType: definition.type,
@@ -100,10 +103,10 @@ export const buildReminderPlanRecords = ({
       scheduledAt: row.scheduledAt,
       status: row.status,
       scheduleVersion: version,
-      channels: row.channels,
+      channels: pendingChannels,
       contentSnapshot: content,
-      emailDelivery: deliveryState(row.channels, 'email'),
-      whatsappDelivery: deliveryState(row.channels, 'whatsapp'),
+      emailDelivery: deliveryState(pendingChannels, 'email'),
+      whatsappDelivery: deliveryState(pendingChannels, 'whatsapp'),
       ...(row.status === 'missed' ? { missedAt: row.missedAt || now } : {}),
     });
     return {

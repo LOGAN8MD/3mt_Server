@@ -6,6 +6,11 @@ import {
   moneyField,
   paymentSchema,
 } from './transactionSchemas.js';
+import {
+  bilingualContentSchema,
+  REMINDER_CHANNELS,
+  validateChannels,
+} from './reminderSchemas.js';
 
 export const RENTAL_STATUSES = Object.freeze([
   'draft',
@@ -25,6 +30,37 @@ const requiresReturnDates = function () {
 const requiresCancellationDetails = function () {
   return this.status === 'cancelled';
 };
+
+const rentalReminderRowSchema = new mongoose.Schema(
+  {
+    offsetMinutes: { type: Number, required: true, min: 1 },
+    channels: {
+      type: [{ type: String, enum: REMINDER_CHANNELS }],
+      required: true,
+      validate: {
+        validator: validateChannels,
+        message: 'channels must contain unique email and/or whatsapp values',
+      },
+    },
+    content: { type: bilingualContentSchema, required: true },
+  },
+  { _id: false }
+);
+
+const rentalReminderSettingsSchema = new mongoose.Schema(
+  {
+    mode: { type: String, enum: ['default', 'custom'], default: 'default', required: true },
+    reminders: {
+      type: [rentalReminderRowSchema],
+      default: [],
+      validate: {
+        validator: (rows) => rows.length <= 20,
+        message: 'A rental reminder plan can contain at most 20 reminders',
+      },
+    },
+  },
+  { _id: false }
+);
 
 const rentalSchema = new mongoose.Schema(
   {
@@ -148,6 +184,11 @@ const rentalSchema = new mongoose.Schema(
     returnConditionNote: { type: String, trim: true, default: '' },
     settlementNote: { type: String, trim: true, default: '' },
     notes: { type: String, trim: true, default: '' },
+    reminderSettings: {
+      type: rentalReminderSettingsSchema,
+      default: () => ({ mode: 'default', reminders: [] }),
+      required: true,
+    },
     cancellationReason: {
       type: String,
       trim: true,
@@ -188,6 +229,21 @@ rentalSchema.pre('validate', function validateRentalDates() {
 
   if (this.handoverAt && this.actualReturnAt && this.actualReturnAt < this.handoverAt) {
     this.invalidate('actualReturnAt', 'actualReturnAt cannot be before handoverAt');
+  }
+});
+
+rentalSchema.pre('validate', function validateReminderSettings() {
+  const settings = this.reminderSettings;
+  if (!settings) return;
+  if (settings.mode === 'default' && settings.reminders.length > 0) {
+    this.invalidate('reminderSettings.reminders', 'Default reminder settings cannot contain custom rows');
+  }
+  if (settings.mode === 'custom' && settings.reminders.length === 0) {
+    this.invalidate('reminderSettings.reminders', 'Custom reminder settings require at least one row');
+  }
+  const offsets = settings.reminders.map(({ offsetMinutes }) => offsetMinutes);
+  if (new Set(offsets).size !== offsets.length) {
+    this.invalidate('reminderSettings.reminders', 'Reminder offsets must be unique');
   }
 });
 

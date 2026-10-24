@@ -26,6 +26,7 @@ import {
   prepareRentalReturn,
   prepareRentalTerms,
 } from '../utils/rentalWorkflow.js';
+import { prepareRentalReminderSettings } from '../utils/rentalReminderSettings.js';
 
 const rentalPopulate = [
   { path: 'machine', select: 'name type category subCategory brand model condition availabilityType availabilityStatus images' },
@@ -169,6 +170,9 @@ const existingDraftInput = (rental) => ({
       }
     : undefined,
   notes: rental.notes,
+  reminderSettings: rental.reminderSettings?.toObject
+    ? rental.reminderSettings.toObject()
+    : rental.reminderSettings,
 });
 
 const applyPreparedTerms = (rental, terms, machine, customer, adminId) => {
@@ -190,6 +194,12 @@ const applyPreparedTerms = (rental, terms, machine, customer, adminId) => {
   rental.payments = terms.payments;
   rental.notes = terms.notes;
   rental.updatedBy = adminId;
+};
+
+const applyReminderSettings = (rental, value, customer, now = new Date()) => {
+  const { settings } = prepareRentalReminderSettings(value, { rental, customer, now });
+  rental.reminderSettings = settings;
+  return settings;
 };
 
 const populatedRental = (id) => Rental.findById(id).populate(rentalPopulate).lean();
@@ -235,6 +245,7 @@ export const quoteRental = async (req, res, next) => {
 
 export const createRental = async (req, res, next) => {
   let claimedMachine = null;
+  let createdRental = null;
 
   try {
     assertOnlyRentalFields(req.body);
@@ -245,30 +256,35 @@ export const createRental = async (req, res, next) => {
 
     const terms = prepareRentalTerms(req.body, req.user._id);
     const records = await findRentalPartyRecords(terms.machineId, terms.customerId);
-    if (status === 'active') {
-      claimedMachine = await claimMachine(records.machine._id, terms.expectedReturnAt);
-      records.machine = claimedMachine;
-    }
-
     const rental = new Rental({
       rentalCode: generateRentalCode(),
       status,
       createdBy: req.user._id,
     });
     applyPreparedTerms(rental, terms, records.machine, records.customer, req.user._id);
+    applyReminderSettings(rental, req.body.reminderSettings, records.customer);
+    if (status === 'active') {
+      claimedMachine = await claimMachine(records.machine._id, terms.expectedReturnAt);
+      records.machine = claimedMachine;
+      applyPreparedTerms(rental, terms, records.machine, records.customer, req.user._id);
+    }
     rental.auditHistory.push({
       action: status === 'active' ? 'rental_created_and_activated' : 'rental_draft_created',
       note: status === 'active' ? 'Rental confirmed at creation' : 'Editable rental draft saved',
       performedBy: req.user._id,
     });
     await rental.save();
+    createdRental = rental;
     if (status === 'active') {
+      await createRentalLifecycleReminders(rental, req.user._id, { customer: records.customer });
       claimedMachine = null;
-      await createRentalLifecycleReminders(rental, req.user._id);
     }
 
     res.status(201).json(await populatedRental(rental._id));
   } catch (error) {
+    if (createdRental?.status === 'active' && claimedMachine) {
+      await Rental.deleteOne({ _id: createdRental._id, status: 'active' }).catch(() => {});
+    }
     if (claimedMachine) await releaseMachine(claimedMachine._id).catch(() => {});
     handleRentalError(error, next, 'Failed to create rental');
   }
@@ -329,6 +345,7 @@ export const updateRentalDraft = async (req, res, next) => {
     const terms = prepareRentalTerms(input, req.user._id);
     const { machine, customer } = await findRentalPartyRecords(terms.machineId, terms.customerId);
     applyPreparedTerms(rental, terms, machine, customer, req.user._id);
+    applyReminderSettings(rental, input.reminderSettings, customer);
     rental.auditHistory.push({
       action: 'rental_draft_updated',
       note: 'Draft details and calculated quote updated',
@@ -345,6 +362,7 @@ export const updateRentalDraft = async (req, res, next) => {
 
 export const activateRental = async (req, res, next) => {
   let claimedMachine = null;
+  let activatedRental = null;
 
   try {
     const rental = await findRentalOrThrow(req.params.id);
@@ -354,6 +372,7 @@ export const activateRental = async (req, res, next) => {
 
     const terms = prepareRentalTerms(existingDraftInput(rental), req.user._id);
     const records = await findRentalPartyRecords(terms.machineId, terms.customerId);
+    applyReminderSettings(rental, rental.reminderSettings, records.customer);
     claimedMachine = await claimMachine(records.machine._id, terms.expectedReturnAt);
     applyPreparedTerms(rental, terms, claimedMachine, records.customer, req.user._id);
     rental.status = 'active';
@@ -363,11 +382,17 @@ export const activateRental = async (req, res, next) => {
       performedBy: req.user._id,
     });
     await rental.save();
+    activatedRental = rental;
+    await createRentalLifecycleReminders(rental, req.user._id, { customer: records.customer });
     claimedMachine = null;
-    await createRentalLifecycleReminders(rental, req.user._id);
 
     res.json(await populatedRental(rental._id));
   } catch (error) {
+    if (activatedRental && claimedMachine) {
+      activatedRental.status = 'draft';
+      activatedRental.auditHistory.pop();
+      await activatedRental.save().catch(() => {});
+    }
     if (claimedMachine) await releaseMachine(claimedMachine._id).catch(() => {});
     handleRentalError(error, next, 'Failed to activate rental');
   }
@@ -442,6 +467,8 @@ export const extendRental = async (req, res, next) => {
   let productUpdated = false;
   let previousExpectedReturnAt;
   let rentalMachineId;
+  let originalRental;
+  let extensionSaved = false;
 
   try {
     const rental = await findRentalOrThrow(req.params.id);
@@ -468,6 +495,7 @@ export const extendRental = async (req, res, next) => {
     }
 
     previousExpectedReturnAt = rental.expectedReturnAt;
+    originalRental = rental.toObject({ depopulate: true });
     const quote = calculateRentalQuote({
       handoverAt: rental.handoverAt,
       expectedReturnAt,
@@ -502,11 +530,16 @@ export const extendRental = async (req, res, next) => {
       performedBy: req.user._id,
     });
     await rental.save();
-    productUpdated = false;
+    extensionSaved = true;
     await rescheduleRentalReturnReminders(rental, req.user._id);
+    extensionSaved = false;
+    productUpdated = false;
 
     res.json(await populatedRental(rental._id));
   } catch (error) {
+    if (extensionSaved && originalRental) {
+      await Rental.collection.replaceOne({ _id: originalRental._id }, originalRental).catch(() => {});
+    }
     if (productUpdated) {
       await Product.findByIdAndUpdate(
         rentalMachineId,

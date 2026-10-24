@@ -1,10 +1,16 @@
+import mongoose from 'mongoose';
 import ReminderDefinition from '../models/ReminderDefinition.js';
 import ReminderOccurrence from '../models/ReminderOccurrence.js';
+import ReminderPlan from '../models/ReminderPlan.js';
 import { cancelReminderTimers, processReminderEmails } from './reminderProcessor.js';
+import { buildReminderPlanRecords, reminderPlanFingerprint } from './reminderPlanService.js';
 import {
   buildDefaultReturnReminderPlans,
   buildRentalActivationReminderPlan,
 } from '../utils/rentalReminderWorkflow.js';
+import {
+  prepareRentalReminderSettings,
+} from '../utils/rentalReminderSettings.js';
 
 const UNSENT_OCCURRENCE_STATUSES = ['pending', 'scheduled', 'processing', 'failed'];
 
@@ -27,11 +33,22 @@ export const buildOccurrenceUpsertDocument = (occurrence, definitionId) => {
   };
 };
 
-export const upsertPlan = async ({ definition, occurrence }) => {
+const SUCCESSFUL_CHANNEL_STATUSES = new Set(['accepted', 'delivered', 'manual_sent']);
+
+const customerFromRental = (rental) => ({
+  _id: rental.customer,
+  name: rental.customerSnapshot?.name || '',
+  email: rental.customerSnapshot?.email || '',
+  phone: rental.customerSnapshot?.phone || '',
+});
+
+const planCodeForRental = (rental) => `RPL-${rental._id}-RETURN`.toUpperCase();
+
+export const upsertPlan = async ({ definition, occurrence }, { session } = {}) => {
   const savedDefinition = await ReminderDefinition.findOneAndUpdate(
     { definitionCode: definition.definitionCode },
     { $setOnInsert: definition },
-    { new: true, upsert: true, runValidators: true, setDefaultsOnInsert: true }
+    { new: true, upsert: true, runValidators: true, setDefaultsOnInsert: true, session }
   );
 
   return ReminderOccurrence.findOneAndUpdate(
@@ -39,24 +56,172 @@ export const upsertPlan = async ({ definition, occurrence }) => {
     {
       $setOnInsert: buildOccurrenceUpsertDocument(occurrence, savedDefinition._id),
     },
-    { new: true, upsert: true, runValidators: true, setDefaultsOnInsert: true }
+    { new: true, upsert: true, runValidators: true, setDefaultsOnInsert: true, session }
   );
+};
+
+const createCompleteRentalReturnPlan = async (
+  rental,
+  adminId,
+  { now, customer, session }
+) => {
+  const { prepared, settings } = prepareRentalReminderSettings(rental.reminderSettings, {
+    rental,
+    customer,
+    now,
+  });
+  const existing = await ReminderPlan.findOne({
+    rental: rental._id,
+    status: { $in: ['active', 'paused'] },
+  }).session(session);
+  if (existing) return existing;
+
+  const planId = new mongoose.Types.ObjectId();
+  const planCode = planCodeForRental(rental);
+  const records = buildReminderPlanRecords({
+    planId,
+    planCode,
+    version: 1,
+    prepared,
+    rental,
+    customer,
+    adminId,
+    now,
+  });
+  const [plan] = await ReminderPlan.create([{
+    _id: planId,
+    planCode,
+    planType: 'rental',
+    reminderMode: prepared.reminderMode,
+    rental: rental._id,
+    customer: rental.customer,
+    recipientSnapshot: records.recipientSnapshot,
+    startsAt: prepared.startsAt,
+    endsAt: prepared.endsAt,
+    rows: records.planRows,
+    fingerprint: reminderPlanFingerprint(prepared),
+    submissionKey: `rental-${rental._id}-activation`,
+    createdBy: adminId,
+    updatedBy: adminId,
+    auditHistory: [{
+      action: 'rental_reminder_plan_activated',
+      note: `${settings.mode} rental reminder settings activated`,
+      performedBy: adminId,
+      performedAt: now,
+    }],
+  }], { session });
+  if (records.definitions.length) {
+    await ReminderDefinition.insertMany(records.definitions, { session });
+    await ReminderOccurrence.insertMany(records.occurrences, { session });
+  }
+  return plan;
 };
 
 export const createRentalLifecycleReminders = async (
   rental,
   adminId,
-  { now = new Date() } = {}
+  { now = new Date(), customer = customerFromRental(rental) } = {}
 ) => {
-  const plans = [
-    buildRentalActivationReminderPlan(rental, adminId, { now }),
-    ...buildDefaultReturnReminderPlans(rental, adminId, { now }),
-  ];
-
-  const occurrences = [];
-  for (const plan of plans) occurrences.push(await upsertPlan(plan));
+  const activationPlan = buildRentalActivationReminderPlan(rental, adminId, { now });
+  let activationOccurrence;
+  try {
+    await mongoose.connection.transaction(async (session) => {
+      await createCompleteRentalReturnPlan(rental, adminId, { now, customer, session });
+      activationOccurrence = await upsertPlan(activationPlan, { session });
+    });
+  } catch (error) {
+    if (error?.code !== 11000) throw error;
+    const existingPlan = await ReminderPlan.exists({
+      rental: rental._id,
+      status: { $in: ['active', 'paused'] },
+    });
+    if (!existingPlan) throw error;
+    activationOccurrence = await upsertPlan(activationPlan);
+  }
   void processReminderEmails().catch((error) => console.error('Rental reminder scan failed:', error.message));
-  return occurrences;
+  return activationOccurrence;
+};
+
+const deliveredChannelsByRow = async (planId, session) => {
+  const occurrences = await ReminderOccurrence.find({ plan: planId })
+    .select('planRowKey emailDelivery.status whatsappDelivery.status')
+    .session(session)
+    .lean();
+  const result = new Map();
+  for (const occurrence of occurrences) {
+    const delivered = result.get(occurrence.planRowKey) || new Set();
+    if (SUCCESSFUL_CHANNEL_STATUSES.has(occurrence.emailDelivery?.status)) delivered.add('email');
+    if (SUCCESSFUL_CHANNEL_STATUSES.has(occurrence.whatsappDelivery?.status)) delivered.add('whatsapp');
+    result.set(occurrence.planRowKey, delivered);
+  }
+  return new Map([...result].map(([key, channels]) => [key, [...channels]]));
+};
+
+const rescheduleCompleteRentalPlan = async (rental, plan, adminId, now) => {
+  const customer = customerFromRental(rental);
+  const { prepared } = prepareRentalReminderSettings(
+    { mode: plan.reminderMode, reminders: plan.reminderMode === 'custom' ? plan.rows : [] },
+    { rental, customer, now }
+  );
+  const nextVersion = plan.version + 1;
+  let cancelledIds = [];
+  await mongoose.connection.transaction(async (session) => {
+    const excludedChannelsByRowKey = await deliveredChannelsByRow(plan._id, session);
+    const records = buildReminderPlanRecords({
+      planId: plan._id,
+      planCode: plan.planCode,
+      version: nextVersion,
+      prepared,
+      rental,
+      customer,
+      adminId,
+      now,
+      excludedChannelsByRowKey,
+    });
+    for (const definition of records.definitions) definition.status = plan.status;
+    const unsent = await ReminderOccurrence.find({
+      plan: plan._id,
+      status: { $in: UNSENT_OCCURRENCE_STATUSES },
+    }).select('_id').session(session).lean();
+    cancelledIds = unsent.map(({ _id }) => _id);
+    const cancellation = {
+      status: 'cancelled',
+      cancelledAt: now,
+      cancelledBy: adminId,
+      cancellationReason: 'Superseded by rental return deadline extension',
+    };
+    await ReminderOccurrence.updateMany(
+      { _id: { $in: cancelledIds } },
+      { $set: { ...cancellation, lockToken: '' }, $unset: { lockedAt: 1, lockExpiresAt: 1, nextAttemptAt: 1 } },
+      { session }
+    );
+    await ReminderDefinition.updateMany(
+      { plan: plan._id, status: { $in: ['active', 'paused'] } },
+      { $set: { ...cancellation, updatedBy: adminId } },
+      { session }
+    );
+    plan.startsAt = prepared.startsAt;
+    plan.endsAt = prepared.endsAt;
+    plan.rows = records.planRows;
+    plan.version = nextVersion;
+    plan.fingerprint = reminderPlanFingerprint(prepared);
+    plan.updatedBy = adminId;
+    plan.auditHistory.push({
+      action: 'rental_reminder_plan_rescheduled',
+      note: 'Rental return deadline was extended',
+      changes: { scheduleVersion: nextVersion, expectedReturnAt: rental.expectedReturnAt },
+      performedBy: adminId,
+      performedAt: now,
+    });
+    await plan.save({ session });
+    if (records.definitions.length) {
+      await ReminderDefinition.insertMany(records.definitions, { session });
+      await ReminderOccurrence.insertMany(records.occurrences, { session });
+    }
+  });
+  cancelReminderTimers(cancelledIds);
+  void processReminderEmails().catch((error) => console.error('Rental reminder scan failed:', error.message));
+  return plan;
 };
 
 export const rescheduleRentalReturnReminders = async (
@@ -64,6 +229,14 @@ export const rescheduleRentalReturnReminders = async (
   adminId,
   { now = new Date() } = {}
 ) => {
+  const completePlan = await ReminderPlan.findOne({
+    rental: rental._id,
+    status: { $in: ['active', 'paused'] },
+  });
+  if (completePlan) {
+    return rescheduleCompleteRentalPlan(rental, completePlan, adminId, now);
+  }
+
   const definitions = await ReminderDefinition.find({
     rental: rental._id,
     type: 'rental_return',
@@ -126,22 +299,57 @@ export const cancelRentalReminders = async (
   reason,
   { now = new Date() } = {}
 ) => {
-  const definitions = await ReminderDefinition.find({
-    rental: rentalId,
-    status: { $in: ['active', 'paused'] },
-  }).select('_id');
-  const definitionIds = definitions.map((definition) => definition._id);
+  let unsentOccurrences = [];
+  let definitionResult = { modifiedCount: 0 };
+  let occurrenceResult = { modifiedCount: 0 };
+  let planResult = { modifiedCount: 0 };
+  await mongoose.connection.transaction(async (session) => {
+    const definitions = await ReminderDefinition.find({
+      rental: rentalId,
+      status: { $in: ['active', 'paused'] },
+    }).select('_id').session(session);
+    const definitionIds = definitions.map((definition) => definition._id);
 
-  if (definitionIds.length === 0) return { definitionsCancelled: 0, occurrencesCancelled: 0 };
-
-  const unsentOccurrences = await ReminderOccurrence.find({
-    definition: { $in: definitionIds },
-    status: { $in: UNSENT_OCCURRENCE_STATUSES },
-  }).select('_id').lean();
-
-  const [definitionResult, occurrenceResult] = await Promise.all([
-    ReminderDefinition.updateMany(
-      { _id: { $in: definitionIds } },
+    if (definitionIds.length) {
+      unsentOccurrences = await ReminderOccurrence.find({
+        definition: { $in: definitionIds },
+        status: { $in: UNSENT_OCCURRENCE_STATUSES },
+      }).select('_id').session(session).lean();
+      [definitionResult, occurrenceResult] = await Promise.all([
+        ReminderDefinition.updateMany(
+          { _id: { $in: definitionIds } },
+          {
+            $set: {
+              status: 'cancelled',
+              cancelledAt: now,
+              cancelledBy: adminId,
+              cancellationReason: reason,
+              updatedBy: adminId,
+            },
+          },
+          { session }
+        ),
+        ReminderOccurrence.updateMany(
+          {
+            definition: { $in: definitionIds },
+            status: { $in: UNSENT_OCCURRENCE_STATUSES },
+          },
+          {
+            $set: {
+              status: 'cancelled',
+              cancelledAt: now,
+              cancelledBy: adminId,
+              cancellationReason: reason,
+              lockToken: '',
+            },
+            $unset: { lockedAt: 1, lockExpiresAt: 1, nextAttemptAt: 1 },
+          },
+          { session }
+        ),
+      ]);
+    }
+    planResult = await ReminderPlan.updateMany(
+      { rental: rentalId, status: { $in: ['active', 'paused'] } },
       {
         $set: {
           status: 'cancelled',
@@ -150,30 +358,24 @@ export const cancelRentalReminders = async (
           cancellationReason: reason,
           updatedBy: adminId,
         },
-      }
-    ),
-    ReminderOccurrence.updateMany(
-      {
-        definition: { $in: definitionIds },
-        status: { $in: UNSENT_OCCURRENCE_STATUSES },
-      },
-      {
-        $set: {
-          status: 'cancelled',
-          cancelledAt: now,
-          cancelledBy: adminId,
-          cancellationReason: reason,
-          lockToken: '',
+        $push: {
+          auditHistory: {
+            action: 'rental_reminder_plan_cancelled',
+            note: reason,
+            performedBy: adminId,
+            performedAt: now,
+          },
         },
-        $unset: { lockedAt: 1, lockExpiresAt: 1, nextAttemptAt: 1 },
-      }
-    ),
-  ]);
+      },
+      { session }
+    );
+  });
   cancelReminderTimers(unsentOccurrences.map(({ _id }) => _id));
 
   return {
     definitionsCancelled: definitionResult.modifiedCount,
     occurrencesCancelled: occurrenceResult.modifiedCount,
+    plansCancelled: planResult.modifiedCount,
   };
 };
 

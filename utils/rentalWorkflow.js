@@ -26,6 +26,7 @@ const EDITABLE_RENTAL_FIELDS = new Set([
   'securityDepositReceivedPaise',
   'initialPayment',
   'notes',
+  'reminderSettings',
   'status',
 ]);
 
