@@ -4,6 +4,8 @@ import {
   cancelReminderOccurrence,
   createReminder,
   getReminderById,
+  getReminderLogGroups,
+  getReminderLogGroupHistory,
   getReminderOccurrences,
   getReminders,
   pauseReminder,
@@ -37,6 +39,8 @@ router.post('/plans/:id/pause', pauseReminderPlan);
 router.post('/plans/:id/resume', resumeReminderPlan);
 router.post('/plans/:id/cancel', cancelReminderPlan);
 router.post('/preview', previewReminder);
+router.get('/log-groups', getReminderLogGroups);
+router.get('/log-groups/:groupType/:groupId', getReminderLogGroupHistory);
 router.get('/occurrences', getReminderOccurrences);
 router.post('/occurrences/:id/cancel', cancelReminderOccurrence);
 router.post('/occurrences/:id/send-email', sendOccurrenceEmail);

@@ -16,7 +16,7 @@ cd ../3mt_dashboard
 npm run verify
 ```
 
-The backend suite currently passes 145 tests and covers billing and settlement, one-machine eligibility, lifecycle reminder creation, selected-channel initialization, bilingual rendering, schedule versioning, scoped rental/standalone occurrence filtering before pagination, retries, atomic email claims, duplicate timer prevention, cancellation cleanup, and inactive-rental eligibility rejection. The dashboard suite currently passes 57 tests plus the optimized production build and covers creation/drafts, rental management, standalone plans, plan lifecycle controls, scoped logs, channel presentation/manual WhatsApp confirmation, route compatibility, roles, long content, keyboard dismissal, and persistent navigation.
+The backend suite currently passes 157 tests and covers billing and settlement, one-machine eligibility, lifecycle reminder creation, selected-channel initialization, bilingual rendering, schedule versioning, scoped rental/standalone filtering before pagination, deterministic grouped-log identity and legacy fallbacks, exact-group isolation, retries, atomic email claims, duplicate timer prevention, cancellation cleanup, and inactive-rental eligibility rejection. The dashboard suite currently passes 81 tests plus the optimized production build and covers creation/drafts, rental management, standalone plans, plan lifecycle controls, grouped rental/custom log overview and history, all retained occurrence statuses, message previews, provider attempts, independent channel actions, query-preserving navigation, route compatibility, roles, long content, keyboard dismissal, and persistent navigation.
 
 ## Production Configuration
 
@@ -42,7 +42,7 @@ Brevo IP security must authorize every outbound IP range shown under the Render 
 
 1. Run backend and dashboard verification locally.
 2. Deploy the backend first. Wait for `GET /api/health` to return HTTP 200 before publishing the dashboard.
-3. Confirm the deployed backend exposes the admin-only reminder plan routes and accepts `scope=rental` and `scope=standalone` on `GET /api/reminders/occurrences` before enabling the new dashboard UI.
+3. Confirm the deployed backend exposes the admin-only reminder plan routes, accepts `scope=rental` and `scope=standalone` on `GET /api/reminders/occurrences`, and serves `GET /api/reminders/log-groups` plus `GET /api/reminders/log-groups/:groupType/:groupId` before enabling the grouped dashboard UI.
 4. Deploy the dashboard and sign in with a dedicated admin account.
 5. Keep the customer website unchanged; the reminder-plan release does not require a website deployment.
 
@@ -53,6 +53,20 @@ After dashboard deployment, verify these admin routes at desktop and mobile widt
 - `/admin/reminder-logs/rental` and `/admin/reminder-logs/custom`
 
 Refresh each route and use browser back/forward between tabs. Confirm only Create Reminders, Manage Reminders, and Reminder Logs appear in the sidebar; the active entry remains highlighted and the mobile menu closes after navigation. Confirm `/admin/rentals`, `/admin/rentals?workspace=create`, and `/admin/reminders` redirect without a full-page reload.
+
+### Grouped Reminder Logs
+
+Use dedicated test records rather than deleting or rewriting production history:
+
+1. Confirm Rental Machines shows one entry per rental booking and combines its activation confirmation with every return-reminder version.
+2. Confirm Custom Messages shows one entry per reminder plan. Create two plans for the same test customer and confirm they remain separate entries and separate histories.
+3. Confirm legacy records without a plan remain visible under their deterministic definition/occurrence fallback group.
+4. Search by customer name, email, and phone; verify totals and pagination are calculated after search.
+5. Verify created/scheduled sorting in both directions. Scheduled sorting uses the next future unsent occurrence, or the latest scheduled occurrence when none remains.
+6. Open a rental and custom group. Confirm starting/confirmation messages, edited schedule versions, pending, processing, sent, partially failed, failed, missed, and cancelled history remain visible in chronological order.
+7. Confirm all displayed times are IST and that Back to reminder logs restores the selected tab, search, sort, direction, and page.
+8. On eligible test occurrences only, verify View message, Retry email, Share on WhatsApp, and Mark as sent affect the selected occurrence and preserve independent channel state.
+9. Repeat the overview and detail checks at desktop and mobile widths, including long customer names/messages and browser refresh/back/forward.
 
 No destructive data migration is required. Existing reminder definitions and occurrences remain readable, while new complete plans add `ReminderPlan` records and optional references. Before live creation, confirm MongoDB has these indexes from the current schemas:
 
@@ -152,7 +166,7 @@ As of 24 October 2026:
 - Its WhatsApp channel independently showed `Message ready` and was manually shared.
 - Selected channel statuses were repaired and future occurrence upserts initialize them explicitly.
 - The final read-only MongoDB integrity audit found zero duplicate occurrence keys, zero selected channels left as `not_selected`, and zero active reminder definitions attached to returned or cancelled rentals.
-- The last deployed production evidence predates the local Tasks 29-35 reorganization. Current local verification passes 145 backend tests, 57 dashboard tests, backend syntax checks, and the optimized dashboard production build; these local results do not prove deployment or provider delivery.
+- The last deployed production evidence predates the local grouped-log Tasks 36-41. Current local verification passes 157 backend tests, 81 dashboard tests, backend syntax/reminder checks, and the optimized dashboard production build. A local browser check confirmed the protected Reminder Logs route redirects to secure login. These results do not prove deployed MongoDB aggregation, authenticated desktop/mobile rendering, or provider/customer receipt.
 
 Cancellation/return and extension replacement are covered by automated lifecycle and cleanup tests. Repeat their manual production smoke tests after changes to rental lifecycle, reminder scheduling, cron configuration, or provider configuration.
 

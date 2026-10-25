@@ -2,6 +2,8 @@ import { randomBytes } from 'node:crypto';
 import mongoose from 'mongoose';
 import ReminderDefinition from '../models/ReminderDefinition.js';
 import ReminderOccurrence from '../models/ReminderOccurrence.js';
+import ReminderPlan from '../models/ReminderPlan.js';
+import NotificationDeliveryAttempt from '../models/NotificationDeliveryAttempt.js';
 import Rental from '../models/Rental.js';
 import User from '../models/User.js';
 import { deliverReminderEmail } from '../services/reminderEmailDeliveryService.js';
@@ -15,6 +17,12 @@ import {
   prepareReminderRequest,
   reminderOccurrenceScopeFilter,
 } from '../utils/reminderManagement.js';
+import {
+  buildReminderLogGroupsPipeline,
+  parseReminderLogGroupIdentity,
+  parseReminderLogGroupQuery,
+  reminderLogGroupOccurrenceFilter,
+} from '../utils/reminderLogGroups.js';
 
 const definitionPopulate = [
   { path: 'customer', select: 'name firstName lastName email phone role' },
@@ -386,6 +394,99 @@ export const getReminderOccurrences = async (req, res, next) => {
     res.json({ occurrences, pagination: { page: pagination.page, limit: pagination.limit, total, pages: Math.ceil(total / pagination.limit) } });
   } catch (error) {
     handleReminderError(error, next, 'Failed to fetch reminder occurrences');
+  }
+};
+
+export const getReminderLogGroups = async (req, res, next) => {
+  try {
+    const options = parseReminderLogGroupQuery(req.query);
+    const [result = { groups: [], total: [] }] = await ReminderOccurrence.aggregate(
+      buildReminderLogGroupsPipeline(options)
+    );
+    const total = result.total[0]?.value || 0;
+    res.json({
+      groups: result.groups,
+      pagination: {
+        page: options.page,
+        limit: options.limit,
+        total,
+        pages: Math.ceil(total / options.limit),
+      },
+      sort: { by: options.sortBy, direction: options.sortDirection },
+      scope: options.scope,
+    });
+  } catch (error) {
+    handleReminderError(error, next, 'Failed to fetch grouped reminder logs');
+  }
+};
+
+export const getReminderLogGroupHistory = async (req, res, next) => {
+  try {
+    const identity = parseReminderLogGroupIdentity({ ...req.params, scope: req.query.scope });
+    const occurrences = await ReminderOccurrence.find(
+      reminderLogGroupOccurrenceFilter(identity)
+    )
+      .select('-lockToken')
+      .sort({ scheduledAt: 1, scheduleVersion: 1, createdAt: 1, _id: 1 })
+      .lean();
+    if (!occurrences.length) throw new AppError('Reminder log group not found', 404);
+
+    const uniqueIds = (field) => [
+      ...new Set(occurrences.map((item) => item[field]?.toString()).filter(Boolean)),
+    ];
+    const occurrenceIds = occurrences.map(({ _id }) => _id);
+    const definitionIds = uniqueIds('definition');
+    const planIds = uniqueIds('plan');
+    const rentalIds = uniqueIds('rental');
+    const [definitions, plans, rentals, attempts] = await Promise.all([
+      ReminderDefinition.find({ _id: { $in: definitionIds } })
+        .populate('createdBy updatedBy cancelledBy', 'name email role')
+        .sort({ scheduleVersion: 1, createdAt: 1, _id: 1 })
+        .lean(),
+      ReminderPlan.find({ _id: { $in: planIds } })
+        .populate('createdBy updatedBy cancelledBy', 'name email role')
+        .sort({ createdAt: 1, _id: 1 })
+        .lean(),
+      Rental.find({ _id: { $in: rentalIds } })
+        .populate('createdBy updatedBy cancelledBy', 'name email role')
+        .sort({ createdAt: 1, _id: 1 })
+        .lean(),
+      NotificationDeliveryAttempt.find({ occurrence: { $in: occurrenceIds } })
+        .select('-lockToken')
+        .sort({ occurrence: 1, channel: 1, attemptNumber: 1, startedAt: 1 })
+        .lean(),
+    ]);
+    const attemptsByOccurrence = attempts.reduce((result, attempt) => {
+      const key = attempt.occurrence.toString();
+      if (!result[key]) result[key] = [];
+      result[key].push(attempt);
+      return result;
+    }, {});
+    const history = occurrences.map((occurrence) => ({
+      ...occurrence,
+      deliveryAttempts: attemptsByOccurrence[occurrence._id.toString()] || [],
+      managementReferences: {
+        occurrenceId: occurrence._id,
+        definitionId: occurrence.definition,
+        planId: occurrence.plan || null,
+        rentalId: occurrence.rental || null,
+      },
+    }));
+    const firstOccurrence = history[0];
+    res.json({
+      group: {
+        ...identity,
+        groupKey: `${identity.groupType}:${identity.groupId}`,
+        recipientSnapshot: firstOccurrence.recipientSnapshot,
+        createdAt: plans[0]?.createdAt || rentals[0]?.createdAt || firstOccurrence.createdAt,
+      },
+      plans,
+      rentals,
+      definitions,
+      occurrences: history,
+    });
+  } catch (error) {
+    handleReminderError(error, next, 'Failed to fetch reminder log group history');
   }
 };
 
